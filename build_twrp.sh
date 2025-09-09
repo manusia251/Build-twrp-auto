@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Skrip Build TWRP - VERSI OTOMATIS FINAL (Fixed for TWRP)
+# Skrip Build TWRP - VERSI OTOMATIS FINAL (Fixed for TWRP + Skip VTS)
 # =================================================================
 
 set -e
@@ -61,6 +61,12 @@ EOF
 echo "--- Langkah 3: Memulai sinkronisasi repositori. Mohon tunggu... ---"
 repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 echo "--- Sinkronisasi selesai. ---"
+
+# --- Patch Skip VTS ---
+if [ -f frameworks/base/core/xsd/vts/Android.mk ]; then
+    sed -i 's|include $(TOP)/test/vts/tools/build/Android.host_config.mk|# &|' frameworks/base/core/xsd/vts/Android.mk
+    echo "--- Patch VTS applied: include Android.host_config.mk dikomentari ---"
+fi
 
 # --- 4. Verifikasi Device Tree ---
 echo "--- Langkah 4: Memeriksa keberadaan device tree... ---"
