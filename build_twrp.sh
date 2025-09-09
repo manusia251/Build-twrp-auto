@@ -107,6 +107,158 @@ else
     exit 1
 fi
 
+# --- 4.1. Kernel Check and Fix ---
+echo "--- Langkah 4.1: Memeriksa dan memperbaiki masalah kernel... ---"
+DEVICE_PATH="device/${VENDOR_NAME}/${DEVICE_CODENAME}"
+
+# Debug: Cek apakah device tree yang di-clone benar
+echo "--- Debug: Mengecek struktur device tree ---"
+ls -la "$DEVICE_PATH/"
+echo "--- Mengecek apakah ada direktori prebuilt ---"
+if [ -d "$DEVICE_PATH/prebuilt" ]; then
+    echo "--- Direktori prebuilt ditemukan, isi: ---"
+    ls -la "$DEVICE_PATH/prebuilt/"
+else
+    echo "--- Direktori prebuilt TIDAK ditemukan ---"
+fi
+
+# Cek apakah nama direktori device tree case-sensitive berbeda
+echo "--- Mengecek kemungkinan nama direktori berbeda ---"
+ls -la device/${VENDOR_NAME}/
+
+# Cek struktur direktori device tree
+echo "--- Struktur device tree: ---"
+find "$DEVICE_PATH" -type f -name "*kernel*" -o -name "*Image*" -o -name "*zImage*" 2>/dev/null || echo "Tidak ada file kernel ditemukan"
+
+# PERBAIKAN: Cek path yang sebenarnya digunakan oleh build system
+echo "--- Mengecek path yang digunakan build system ---"
+ACTUAL_DEVICE_PATH=""
+if [ -d "device/${VENDOR_NAME}/${DEVICE_CODENAME}" ]; then
+    ACTUAL_DEVICE_PATH="device/${VENDOR_NAME}/${DEVICE_CODENAME}"
+elif [ -d "device/${VENDOR_NAME}/Infinix-${DEVICE_CODENAME}" ]; then
+    ACTUAL_DEVICE_PATH="device/${VENDOR_NAME}/Infinix-${DEVICE_CODENAME}"
+    echo "--- Device path menggunakan prefix Infinix: $ACTUAL_DEVICE_PATH ---"
+elif [ -d "device/Infinix/${DEVICE_CODENAME}" ]; then
+    ACTUAL_DEVICE_PATH="device/Infinix/${DEVICE_CODENAME}"
+    echo "--- Device path menggunakan vendor Infinix (kapital): $ACTUAL_DEVICE_PATH ---"
+else
+    echo "--- Mencari device tree dengan pattern lain ---"
+    find device/ -name "*${DEVICE_CODENAME}*" -type d
+fi
+
+if [ -n "$ACTUAL_DEVICE_PATH" ]; then
+    DEVICE_PATH="$ACTUAL_DEVICE_PATH"
+    echo "--- Menggunakan device path: $DEVICE_PATH ---"
+fi
+
+# Jika sudah ada kernel di tempat yang benar, tidak perlu lakukan apa-apa
+if [ -f "$DEVICE_PATH/prebuilt/kernel" ]; then
+    echo "--- Kernel sudah ada di lokasi yang benar: $DEVICE_PATH/prebuilt/kernel ---"
+    KERNEL_FOUND=true
+else
+    echo "--- Kernel tidak ditemukan di lokasi yang diharapkan ---"
+    KERNEL_FOUND=false
+fi
+
+# Jika kernel tidak ditemukan, cek di BoardConfig
+if [ "$KERNEL_FOUND" = false ]; then
+    echo "--- Kernel prebuilt tidak ditemukan. Mengecek BoardConfig... ---"
+    
+    BOARDCONFIG_FILES=(
+        "$DEVICE_PATH/BoardConfig.mk"
+        "$DEVICE_PATH/BoardConfigCommon.mk"
+    )
+    
+    for boardconfig in "${BOARDCONFIG_FILES[@]}"; do
+        if [ -f "$boardconfig" ]; then
+            echo "--- Mengecek $boardconfig ---"
+            
+            # Cek apakah ada TARGET_PREBUILT_KERNEL yang di-comment
+            if grep -q "^#.*TARGET_PREBUILT_KERNEL" "$boardconfig"; then
+                echo "--- Ditemukan TARGET_PREBUILT_KERNEL yang di-comment, mengaktifkan... ---"
+                sed -i 's/^#\s*\(TARGET_PREBUILT_KERNEL\)/\1/' "$boardconfig"
+            fi
+            
+            # Cek apakah menggunakan kernel source instead of prebuilt
+            if grep -q "TARGET_KERNEL_SOURCE" "$boardconfig"; then
+                echo "--- Device menggunakan kernel source, bukan prebuilt ---"
+                echo "--- Menambahkan fallback ke prebuilt kernel ---"
+                
+                # Tambahkan fallback prebuilt kernel config
+                cat >> "$boardconfig" << 'KERNEL_FALLBACK'
+
+# Fallback to prebuilt kernel if source build fails
+ifeq ($(wildcard $(TARGET_KERNEL_SOURCE)),)
+    TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/kernel
+endif
+KERNEL_FALLBACK
+            fi
+            
+            # Extract kernel dari boot.img jika ada
+            if [ -f "$DEVICE_PATH/prebuilt/boot.img" ]; then
+                echo "--- Ditemukan boot.img, mengekstrak kernel... ---"
+                if command -v unpackbootimg >/dev/null 2>&1; then
+                    cd "$DEVICE_PATH/prebuilt"
+                    unpackbootimg -i boot.img
+                    if [ -f "boot.img-kernel" ]; then
+                        cp boot.img-kernel kernel
+                        echo "--- Kernel berhasil diekstrak dari boot.img ---"
+                        KERNEL_FOUND=true
+                    fi
+                    cd - >/dev/null
+                elif command -v python3 >/dev/null 2>&1; then
+                    echo "--- Menggunakan script Python untuk ekstrak kernel... ---"
+                    python3 -c "
+import struct
+import sys
+import os
+
+def extract_kernel_from_boot(boot_img_path, output_path):
+    with open(boot_img_path, 'rb') as f:
+        # Skip Android boot header (2048 bytes)
+        f.seek(2048)
+        kernel_data = f.read(8 * 1024 * 1024)  # Read max 8MB
+        
+        # Find kernel end (look for gzip magic or padding)
+        kernel_end = len(kernel_data)
+        for i in range(len(kernel_data) - 4):
+            if kernel_data[i:i+4] == b'\x00\x00\x00\x00':
+                if all(b == 0 for b in kernel_data[i:i+100]):
+                    kernel_end = i
+                    break
+        
+        with open(output_path, 'wb') as out:
+            out.write(kernel_data[:kernel_end])
+
+if __name__ == '__main__':
+    extract_kernel_from_boot('$DEVICE_PATH/prebuilt/boot.img', '$DEVICE_PATH/prebuilt/kernel')
+    print('Kernel extracted successfully')
+" && echo "--- Kernel berhasil diekstrak ---" && KERNEL_FOUND=true
+                fi
+            fi
+        fi
+    done
+fi
+
+# Jika masih belum ketemu, buat dummy kernel
+if [ "$KERNEL_FOUND" = false ]; then
+    echo "--- PERINGATAN: Kernel tidak ditemukan. Membuat dummy kernel untuk testing... ---"
+    mkdir -p "$DEVICE_PATH/prebuilt"
+    
+    # Buat dummy kernel file (hanya untuk testing, tidak akan boot)
+    dd if=/dev/zero of="$DEVICE_PATH/prebuilt/kernel" bs=1024 count=4096 2>/dev/null
+    echo "--- Dummy kernel dibuat. PERHATIAN: Ini hanya untuk testing build! ---"
+    
+    # Tambahkan komentar di BoardConfig
+    BOARDCONFIG="$DEVICE_PATH/BoardConfig.mk"
+    if [ -f "$BOARDCONFIG" ]; then
+        echo "# WARNING: Using dummy kernel - replace with actual kernel for working recovery" >> "$BOARDCONFIG"
+        echo "TARGET_PREBUILT_KERNEL := \$(DEVICE_PATH)/prebuilt/kernel" >> "$BOARDCONFIG"
+    fi
+fi
+
+echo "--- Kernel check selesai ---"
+
 # --- 5. Proses Kompilasi ---
 echo "--- Langkah 5: Memulai proses kompilasi... ---"
 source build/envsetup.sh
