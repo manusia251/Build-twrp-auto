@@ -50,6 +50,19 @@ echo "================================================"
 echo "     OrangeFox Recovery Builder for X6512       "
 echo "================================================"
 
+# System info
+debug_log "System information:"
+debug_log "OS: $(lsb_release -d 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME)"
+debug_log "Kernel: $(uname -r)"
+debug_log "Architecture: $(uname -m)"
+debug_log "Available memory: $(free -h | grep Mem | awk '{print $2}')"
+debug_log "Available disk space: $(df -h / | tail -1 | awk '{print $4}')"
+
+# Check if we're in Docker/Container environment
+if [ -f /.dockerenv ] || [ -n "$CIRRUS_CI" ]; then
+    debug_log "Running in container environment (Docker/Cirrus CI)"
+fi
+
 # Check arguments
 debug_log "Checking arguments..."
 if [ -z "$DEVICE_TREE" ] || [ -z "$DEVICE_BRANCH" ] || [ -z "$DEVICE_CODENAME" ]; then
@@ -66,6 +79,13 @@ debug_log "Working directory: $(pwd)"
 debug_log "Setting up git configuration..."
 git config --global user.name "manusia"
 git config --global user.email "ndktau@gmail.com"
+
+# Check if repo is available
+if ! command -v repo &> /dev/null; then
+    warning_msg "repo command not found, installing..."
+    curl -s https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+    chmod +x /usr/local/bin/repo
+fi
 
 echo "--- Clone OrangeFox sync script... ---"
 debug_log "Cloning from: https://gitlab.com/OrangeFox/sync.git"
@@ -85,6 +105,12 @@ cd sync_dir
 debug_log "Contents of sync_dir:"
 ls -la
 
+# Check available branches in sync script
+debug_log "Checking available OrangeFox branches..."
+if [ -f orangefox_sync.sh ]; then
+    grep -E "fox_[0-9]+\.[0-9]+" orangefox_sync.sh | head -10
+fi
+
 echo "--- Syncing OrangeFox source code... ---"
 SYNC_PATH=$(realpath ../)
 debug_log "Sync path: $SYNC_PATH"
@@ -92,7 +118,15 @@ debug_log "Sync path: $SYNC_PATH"
 # Use fox_12.1 since fox_11.0 is no longer supported
 if [ -f orangefox_sync.sh ]; then
     debug_log "Found orangefox_sync.sh, using fox_12.1 branch..."
-    bash orangefox_sync.sh --branch 12.1 --path "$SYNC_PATH" || error_exit "Failed to sync OrangeFox source"
+    # Add --depth=1 to reduce download size
+    bash orangefox_sync.sh --branch 12.1 --path "$SYNC_PATH" || {
+        warning_msg "Sync failed, trying alternative method..."
+        cd "$SYNC_PATH"
+        
+        # Alternative: Direct repo init
+        repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git -b fox_12.1
+        repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) || error_exit "Alternative sync also failed"
+    }
 else
     error_exit "orangefox_sync.sh not found!"
 fi
@@ -100,17 +134,19 @@ fi
 cd "$SYNC_PATH"
 debug_log "Checking build system files..."
 
-# Wait for sync to complete
-sleep 5
-
-# Check if build environment exists
-if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
-    warning_msg "Build environment not found, waiting for sync to complete..."
-    sleep 10
-    
-    if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
-        error_exit "Build environment still not found after waiting!"
+# Wait for sync to complete and check multiple times
+for i in {1..10}; do
+    if [ -f build/envsetup.sh ] || [ -f build/make/envsetup.sh ]; then
+        success_msg "Build environment found!"
+        break
     fi
+    warning_msg "Build environment not found (attempt $i/10), waiting..."
+    sleep 5
+done
+
+# Final check
+if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
+    error_exit "Build environment not found after all attempts!"
 fi
 
 echo "--- Clone device tree... ---"
@@ -126,12 +162,31 @@ fi
 # Clone device tree
 git clone "$DEVICE_TREE" -b "$DEVICE_BRANCH" "$DEVICE_PATH" || error_exit "Failed to clone device tree"
 
+# Check if device tree was cloned successfully
+if [ ! -d "$DEVICE_PATH" ]; then
+    error_exit "Device tree directory not found after cloning!"
+fi
+
+debug_log "Device tree contents:"
+ls -la "$DEVICE_PATH"
+
 # Apply touchscreen fixes
 echo "--- Applying touchscreen fixes... ---"
 debug_log "Fixing touchscreen driver: omnivision_tcm_spi (spi2.0)"
 
-# Create touchscreen fix patch
+# Create recovery directory structure if it doesn't exist
+mkdir -p "$DEVICE_PATH/recovery/root/sbin"
+mkdir -p "$DEVICE_PATH/recovery/root/vendor/lib/modules"
+
+# Create touchscreen fix init script
 cat > "$DEVICE_PATH/recovery/root/init.recovery.touchscreen.rc" << 'EOF'
+on early-init
+    # Enable ADB debugging
+    setprop ro.adb.secure 0
+    setprop ro.debuggable 1
+    setprop persist.sys.usb.config adb
+    setprop service.adb.root 1
+
 on boot
     # Touchscreen fix for omnivision_tcm_spi
     write /sys/bus/spi/devices/spi2.0/accessible 1
@@ -147,11 +202,69 @@ on boot
     
     # Enable touchscreen debugging
     write /sys/module/omnivision_tcm_spi/parameters/debug_level 1
+    
+    # Start ADB daemon
+    start adbd
+
+on property:ro.debuggable=1
+    start adbd
+    
+service adbd /sbin/adbd --root_seclabel=u:r:su:s0
+    disabled
+    socket adbd stream 660 system system
+    seclabel u:r:adbd:s0
 EOF
+
+# Create touchscreen fix script
+cat > "$DEVICE_PATH/recovery/root/sbin/fix_touch.sh" << 'EOF'
+#!/sbin/sh
+# Touchscreen fix script for omnivision_tcm_spi
+
+echo "Starting touchscreen fix..." >> /tmp/recovery.log
+
+# Wait for device to settle
+sleep 2
+
+# Check if module exists
+if [ -f /vendor/lib/modules/omnivision_tcm_spi.ko ]; then
+    # Load touchscreen module if not loaded
+    if ! lsmod | grep -q omnivision_tcm_spi; then
+        insmod /vendor/lib/modules/omnivision_tcm_spi.ko
+        echo "Touchscreen module loaded" >> /tmp/recovery.log
+    fi
+fi
+
+# Set permissions
+chmod 666 /dev/input/event* 2>/dev/null
+chmod 666 /dev/spidev2.0 2>/dev/null
+
+# Enable touchscreen
+echo 1 > /sys/bus/spi/devices/spi2.0/accessible 2>/dev/null
+
+# Enable ADB
+setprop ro.adb.secure 0
+setprop ro.debuggable 1
+setprop persist.sys.usb.config adb
+setprop service.adb.root 1
+
+# Log success
+echo "Touchscreen fix applied at $(date)" >> /tmp/recovery.log
+EOF
+
+chmod +x "$DEVICE_PATH/recovery/root/sbin/fix_touch.sh"
 
 # Update init.rc to include touchscreen fix
 if [ -f "$DEVICE_PATH/recovery/root/init.rc" ]; then
     echo "import /init.recovery.touchscreen.rc" >> "$DEVICE_PATH/recovery/root/init.rc"
+else
+    # Create basic init.rc if it doesn't exist
+    cat > "$DEVICE_PATH/recovery/root/init.rc" << 'EOF'
+import /init.recovery.touchscreen.rc
+
+on init
+    # Run touchscreen fix
+    exec u:r:recovery:s0 -- /sbin/fix_touch.sh
+EOF
 fi
 
 # Create custom vendorsetup.sh for OrangeFox variables
@@ -190,15 +303,19 @@ export OF_CLOCK_POS=1
 # Enable keyboard/mouse support for non-touch control
 export TW_USE_MOUSE_INPUT=1
 export TW_ENABLE_VIRTUAL_MOUSE=1
+export TW_HAS_USB_STORAGE=1
 
 # Enable ADB by default for debugging
 export OF_FORCE_ENABLE_ADB=1
 export OF_SKIP_ADB_SECURE=1
+export PLATFORM_SECURITY_PATCH="2099-12-31"
+export TW_DEFAULT_LANGUAGE="en"
 
 # Additional debugging
 export OF_DEBUG_MODE=1
 export TW_INCLUDE_RESETPROP=true
 export TW_INCLUDE_REPACKTOOLS=true
+export TW_INCLUDE_LIBRESETPROP=true
 
 # UI customization
 export OF_USE_GREEN_LED=0
@@ -227,12 +344,16 @@ export OF_DISABLE_MIUI_OTA_BY_DEFAULT=1
 export OF_NO_MIUI_OTA_VENDOR_BACKUP=1
 export OF_NO_SAMSUNG_SPECIAL=1
 
+# Skip FBE decryption if causing issues
+export OF_SKIP_FBE_DECRYPTION=1
+
 echo "OrangeFox build variables loaded for X6512"
 EOF
 
 # Create BoardConfig additions for touchscreen
 echo "--- Updating BoardConfig for touchscreen support... ---"
-cat >> "$DEVICE_PATH/BoardConfig.mk" << 'EOF'
+if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
+    cat >> "$DEVICE_PATH/BoardConfig.mk" << 'EOF'
 
 # Touchscreen configuration
 RECOVERY_TOUCHSCREEN_SWAP_XY := false
@@ -256,13 +377,28 @@ TW_EXCLUDE_DEFAULT_USB_INIT := false
 
 # ADB configuration
 BOARD_ALWAYS_INSECURE := true
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+TW_INCLUDE_FBE_METADATA_DECRYPT := true
+
+# Build as boot image
+BOARD_USES_RECOVERY_AS_BOOT := true
+BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
 EOF
+fi
 
 # Setup build environment
 echo "--- Setting up build environment... ---"
-source build/envsetup.sh || source build/make/envsetup.sh || error_exit "Failed to source envsetup.sh"
+if [ -f build/envsetup.sh ]; then
+    source build/envsetup.sh
+elif [ -f build/make/envsetup.sh ]; then
+    source build/make/envsetup.sh
+else
+    error_exit "Failed to find envsetup.sh"
+fi
 
 # Add device to lunch menu
+debug_log "Adding device to lunch menu..."
 add_lunch_combo "twrp_${DEVICE_CODENAME}-eng" || warning_msg "Failed to add lunch combo"
 
 # Select device
@@ -277,14 +413,18 @@ make clean || warning_msg "Clean failed, continuing anyway..."
 echo "--- Starting OrangeFox build... ---"
 debug_log "Building with TARGET_RECOVERY_IMAGE=$TARGET_RECOVERY_IMAGE"
 
-# Set target to boot image
+# Set additional build variables
 export TW_DEVICE_VERSION="1.0_manusia"
 export TARGET_PREBUILT_KERNEL="$DEVICE_PATH/prebuilt/kernel"
+export ALLOW_MISSING_DEPENDENCIES=true
 
 # Build the recovery
 if [ "$TARGET_RECOVERY_IMAGE" == "boot" ]; then
     debug_log "Building boot image..."
-    mka bootimage -j$(nproc --all) 2>&1 | tee build.log || error_exit "Build failed!"
+    mka bootimage -j$(nproc --all) 2>&1 | tee build.log || {
+        warning_msg "bootimage build failed, trying alternative..."
+        mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log || error_exit "Build failed!"
+    }
 else
     debug_log "Building recovery image..."
     mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log || error_exit "Build failed!"
@@ -297,56 +437,46 @@ OUTPUT_DIR="/tmp/cirrus-ci-build/output"
 mkdir -p "$OUTPUT_DIR"
 
 # Find the built image
-if [ "$TARGET_RECOVERY_IMAGE" == "boot" ]; then
+debug_log "Looking for output images in: $OUT_DIR"
+if [ -d "$OUT_DIR" ]; then
+    ls -la "$OUT_DIR/" | grep -E "\.img|\.zip"
+    
+    # Copy boot image
     if [ -f "$OUT_DIR/boot.img" ]; then
         cp "$OUT_DIR/boot.img" "$OUTPUT_DIR/OrangeFox-${DEVICE_CODENAME}-boot.img"
         success_msg "Boot image copied to output"
-        
-        # Create flashable zip
-        debug_log "Creating flashable zip..."
-        cd "$OUT_DIR"
-        if [ -f "OrangeFox-*.zip" ]; then
-            cp OrangeFox-*.zip "$OUTPUT_DIR/"
-            success_msg "Flashable zip copied to output"
-        fi
-    else
-        error_exit "boot.img not found!"
     fi
-else
+    
+    # Copy recovery image if exists
     if [ -f "$OUT_DIR/recovery.img" ]; then
         cp "$OUT_DIR/recovery.img" "$OUTPUT_DIR/OrangeFox-${DEVICE_CODENAME}-recovery.img"
         success_msg "Recovery image copied to output"
-    else
-        error_exit "recovery.img not found!"
     fi
+    
+    # Find and copy OrangeFox zip
+    for zip_file in "$OUT_DIR"/OrangeFox*.zip; do
+        if [ -f "$zip_file" ]; then
+            cp "$zip_file" "$OUTPUT_DIR/"
+            success_msg "OrangeFox zip copied: $(basename $zip_file)"
+        fi
+    done
+    
+    # Alternative locations for OrangeFox zip
+    if [ -d "$OUT_DIR/OrangeFox" ]; then
+        for zip_file in "$OUT_DIR/OrangeFox"/*.zip; do
+            if [ -f "$zip_file" ]; then
+                cp "$zip_file" "$OUTPUT_DIR/"
+                success_msg "OrangeFox zip copied from OrangeFox dir: $(basename $zip_file)"
+            fi
+        done
+    fi
+else
+    error_exit "Output directory not found: $OUT_DIR"
 fi
 
 # Copy build log
-cp build.log "$OUTPUT_DIR/" || warning_msg "Failed to copy build log"
-
-# List output files
-echo "--- Output files ---"
-ls -lah "$OUTPUT_DIR"
+cp build.log "$OUTPUT_DIR/" 2>/dev/null || warning_msg "Failed to copy build log"
 
 # Create device info file
 cat > "$OUTPUT_DIR/device_info.txt" << EOF
 Device: Infinix X6512
-Android Version: 11
-Partition Type: A/B with Super partition
-Recovery Type: Boot image (no recovery partition)
-Touchscreen: omnivision_tcm_spi (spi2.0) - FIXED
-OrangeFox Version: R11.1
-Build Date: $(date)
-Builder: manusia
-Features:
-- Full OrangeFox features enabled
-- Touchscreen support fixed
-- Non-touch navigation enabled (keyboard/mouse)
-- ADB enabled by default
-- Debug mode enabled
-EOF
-
-success_msg "Build completed successfully!"
-echo "================================================"
-echo "       OrangeFox Build Complete!                "
-echo "================================================"
