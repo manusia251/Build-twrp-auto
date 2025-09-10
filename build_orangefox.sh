@@ -159,6 +159,26 @@ fi
 debug_log "Device tree contents:"
 ls -la $DEVICE_PATH
 
+# Fix BoardConfig.mk - Remove all export statements
+echo "--- Fixing BoardConfig.mk (removing export statements)... ---"
+if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
+    debug_log "Removing export statements from BoardConfig.mk..."
+    
+    # Create a backup
+    cp "$DEVICE_PATH/BoardConfig.mk" "$DEVICE_PATH/BoardConfig.mk.bak"
+    
+    # Remove lines with export or convert them to regular assignments
+    sed -i 's/^export //g' "$DEVICE_PATH/BoardConfig.mk"
+    
+    # Also remove any TW_THEME line that might cause issues
+    sed -i '/^TW_THEME/d' "$DEVICE_PATH/BoardConfig.mk"
+    
+    # Add TW_THEME at the end without export
+    echo "" >> "$DEVICE_PATH/BoardConfig.mk"
+    echo "# Theme" >> "$DEVICE_PATH/BoardConfig.mk"
+    echo "TW_THEME := portrait_hdpi" >> "$DEVICE_PATH/BoardConfig.mk"
+fi
+
 # Fix device tree makefiles
 echo "--- Fixing device tree makefiles... ---"
 cd $DEVICE_PATH
@@ -186,7 +206,7 @@ if [ -f "twrp_${DEVICE_CODENAME}.mk" ]; then
 \$(call inherit-product, vendor/twrp/config/common.mk)
 
 # Inherit from device
-\$(call inherit-product, device/infinix/${DEVICE_CODENAME}/device.mk)
+\$(call inherit-product-if-exists, device/infinix/${DEVICE_CODENAME}/device.mk)
 
 # Device identifier
 PRODUCT_DEVICE := ${DEVICE_CODENAME}
@@ -224,7 +244,7 @@ if [ -f "omni_${DEVICE_CODENAME}.mk" ]; then
 \$(call inherit-product, vendor/twrp/config/common.mk)
 
 # Inherit from device
-\$(call inherit-product, device/infinix/${DEVICE_CODENAME}/device.mk)
+\$(call inherit-product-if-exists, device/infinix/${DEVICE_CODENAME}/device.mk)
 
 # Device identifier
 PRODUCT_DEVICE := ${DEVICE_CODENAME}
@@ -285,6 +305,9 @@ TARGET_SCREEN_WIDTH := 1080
 PRODUCT_SOONG_NAMESPACES += \\
     \$(LOCAL_PATH)
 EOF
+else
+    # Just make sure device.mk doesn't have export statements
+    sed -i 's/^export //g' device.mk
 fi
 
 cd $WORK_DIR
@@ -349,10 +372,10 @@ on property:ro.debuggable=0
     restart adbd
 INIT_EOF
 
-# Update vendorsetup.sh
+# Update vendorsetup.sh (Keep exports here as they're for shell environment, not make)
 echo "--- Setting up OrangeFox build variables... ---"
 cat > $DEVICE_PATH/vendorsetup.sh << VENDOR_EOF
-# OrangeFox Configuration
+# OrangeFox Configuration - These are shell environment variables
 export FOX_USE_BASH_SHELL=1
 export FOX_ASH_IS_BASH=1
 export FOX_USE_NANO_EDITOR=1
@@ -402,14 +425,14 @@ export OF_DEBUG_MODE=1
 echo "OrangeFox build variables loaded for ${DEVICE_CODENAME}"
 VENDOR_EOF
 
-# Update BoardConfig.mk
+# Update BoardConfig.mk - Add touchscreen configs without export
 echo "--- Updating BoardConfig.mk... ---"
 if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
     # Check if touchscreen configs already exist
     if ! grep -q "RECOVERY_TOUCHSCREEN" "$DEVICE_PATH/BoardConfig.mk"; then
         cat >> $DEVICE_PATH/BoardConfig.mk << 'BOARD_EOF'
 
-# Touchscreen Configuration
+# Touchscreen Configuration (no export)
 RECOVERY_TOUCHSCREEN_SWAP_XY := false
 RECOVERY_TOUCHSCREEN_FLIP_X := false
 RECOVERY_TOUCHSCREEN_FLIP_Y := false
