@@ -25,7 +25,7 @@ VENDOR_NAME="infinix"
 
 # --- [BARU] Variabel untuk info build OrangeFox ---
 # Variabel ini akan digunakan di beberapa tempat
-export FOX_VERSION="R12.1_1" # Sesuaikan versinya jika perlu
+export FOX_VERSION="R11.1_1" # Sesuaikan versinya jika perlu
 export FOX_BUILD_TYPE="Stable"    # Bisa juga "Beta"
 
 echo "========================================"
@@ -54,21 +54,21 @@ git config --global user.name "manusia251"
 git config --global user.email "darkside@gmail.com"
 
 # --- [BAGIAN 3: Sinkronisasi Source Code] ---
-echo "--- Langkah 1: Inisialisasi manifest OrangeFox... ---"
-# [DIUBAH] Menggunakan manifest resmi OrangeFox
-repo init -u https://gitlab.com/OrangeFox/Manifest.git -b ${MANIFEST_BRANCH}
+echo "--- Langkah 1: Clone sync script OrangeFox... ---"
+git clone https://gitlab.com/OrangeFox/sync.git -b ${MANIFEST_BRANCH} sync
+cd sync
 
 echo "--- Langkah 2: Membuat local manifest untuk device tree... ---"
-mkdir -p .repo/local_manifests
-cat > .repo/local_manifests/orangefox_device_tree.xml << EOF
+cat > local_manifest.xml << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
     <project name="${DEVICE_TREE_URL#https://github.com/}" path="device/${VENDOR_NAME}/${DEVICE_CODENAME}" remote="github" revision="${DEVICE_TREE_BRANCH}" />
 </manifest>
 EOF
 
-echo "--- Langkah 3: Memulai sinkronisasi repositori. Ini mungkin butuh waktu lama... ---"
-repo sync -c --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+echo "--- Langkah 3: Memulai sinkronisasi repositori menggunakan sync.sh. Ini mungkin butuh waktu lama... ---"
+bash ./sync.sh --branch ${MANIFEST_BRANCH} --local-manifest=local_manifest.xml --path=..
+cd ..
 echo "--- Sinkronisasi selesai. ---"
 
 # --- [BAGIAN 4: Proses Kompilasi] ---
