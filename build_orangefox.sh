@@ -87,43 +87,16 @@ else
     echo "--- Initializing TWRP 12.1 minimal manifest... ---"
     rm -rf .repo
     
-    # Initialize repo with retry mechanism
-    MAX_RETRIES=3
-    RETRY_COUNT=0
-    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --git-lfs --no-repo-verify; then
-            echo "Repo init successful"
-            break
-        else
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "Repo init failed, retry $RETRY_COUNT/$MAX_RETRIES"
-            sleep 10
-        fi
-    done
-    
-    if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-        echo "[ERROR] Failed to initialize repo after $MAX_RETRIES attempts"
+    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --git-lfs --no-repo-verify || {
+        echo "[ERROR] Failed to initialize repo"
         exit 1
-    fi
+    }
     
     echo "--- Starting repo sync (this will take time)... ---"
-    # Sync with retry mechanism
-    RETRY_COUNT=0
-    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if repo sync -c --force-sync --no-tags --no-clone-bundle -j4 --optimized-fetch --prune; then
-            echo "Repo sync successful"
-            break
-        else
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "Repo sync failed, retry $RETRY_COUNT/$MAX_RETRIES"
-            sleep 10
-        fi
-    done
-    
-    if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-        echo "[ERROR] Failed to sync repo after $MAX_RETRIES attempts"
+    repo sync -c --force-sync --no-tags --no-clone-bundle -j4 --optimized-fetch --prune || {
+        echo "[ERROR] Failed to sync repo"
         exit 1
-    fi
+    }
     
     # Clone OrangeFox vendor
     if [ ! -d "vendor/recovery" ]; then
@@ -159,103 +132,114 @@ fi
 debug_log "Device tree contents:"
 ls -la $DEVICE_PATH
 
-# Fix the missing recovery.fstab issue
-echo "--- Fixing recovery.fstab issue... ---"
-# Create the required directory structure
-mkdir -p $DEVICE_PATH/recovery/root/system/etc
+# Create a complete device tree structure
+echo "--- Creating complete device tree structure... ---"
 
-# Check if recovery.fstab exists in the device tree root
-if [ -f "$DEVICE_PATH/recovery.fstab" ]; then
-    echo "Copying recovery.fstab to required location..."
-    cp $DEVICE_PATH/recovery.fstab $DEVICE_PATH/recovery/root/system/etc/recovery.fstab
-elif [ -f "$DEVICE_PATH/recovery/root/etc/recovery.fstab" ]; then
-    echo "Copying recovery.fstab from recovery/root/etc..."
-    cp $DEVICE_PATH/recovery/root/etc/recovery.fstab $DEVICE_PATH/recovery/root/system/etc/recovery.fstab
-else
-    echo "Creating recovery.fstab..."
-    # Create a basic recovery.fstab
-    cat > $DEVICE_PATH/recovery/root/system/etc/recovery.fstab << 'FSTAB_EOF'
-# mount point    fstype    device                                       flags
-/boot            emmc      /dev/block/by-name/boot                     flags=slotselect;display="Boot";backup=1;flashimg=1
-/system          ext4      /dev/block/mapper/system                    flags=display="System";backup=0;logical
-/vendor          ext4      /dev/block/mapper/vendor                    flags=display="Vendor";backup=0;logical
-/product         ext4      /dev/block/mapper/product                   flags=display="Product";backup=0;logical
-/system_ext      ext4      /dev/block/mapper/system_ext                flags=display="System_ext";backup=0;logical
-/metadata        ext4      /dev/block/by-name/metadata                 flags=display="Metadata"
-/data            f2fs      /dev/block/by-name/userdata                 flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption,metadata_encryption=aes-256-xts:wrappedkey_v0
-/cache           ext4      /dev/block/by-name/cache                    flags=display="Cache"
-/recovery        emmc      /dev/block/by-name/recovery                 flags=slotselect;display="Recovery";backup=1;flashimg=1
-/persist         ext4      /dev/block/by-name/persist                  flags=display="Persist"
-/firmware        vfat      /dev/block/by-name/modem                    flags=slotselect;display="Firmware";mounttodecrypt;fsflags=ro
-/misc            emmc      /dev/block/by-name/misc                     flags=display="Misc"
-/modem           emmc      /dev/block/by-name/modem                    flags=slotselect;backup=1;display="Modem"
-/bluetooth       emmc      /dev/block/by-name/bluetooth                flags=slotselect;backup=1;subpartitionof=/modem
-/dsp             emmc      /dev/block/by-name/dsp                      flags=slotselect;backup=1;subpartitionof=/modem
-/efs1            emmc      /dev/block/by-name/modemst1                 flags=backup=1;display="EFS"
-/efs2            emmc      /dev/block/by-name/modemst2                 flags=backup=1;subpartitionof=/efs1
-/efsc            emmc      /dev/block/by-name/fsc                      flags=backup=1;subpartitionof=/efs1
-/efsg            emmc      /dev/block/by-name/fsg                      flags=backup=1;subpartitionof=/efs1
-
-# Removable storage
-/external_sd     auto      /dev/block/mmcblk1p1                        flags=display="MicroSD";storage;wipeingui;removable
-/usb_otg         auto      /dev/block/sda1                             flags=display="USB Storage";storage;wipeingui;removable
-FSTAB_EOF
-fi
-
-# Also copy to the old location if needed
-if [ ! -f "$DEVICE_PATH/recovery/root/etc/recovery.fstab" ]; then
-    mkdir -p $DEVICE_PATH/recovery/root/etc
-    cp $DEVICE_PATH/recovery/root/system/etc/recovery.fstab $DEVICE_PATH/recovery/root/etc/recovery.fstab
-fi
-
-# Fix BoardConfig.mk - Remove all export statements
-echo "--- Fixing BoardConfig.mk (removing export statements)... ---"
+# Fix BoardConfig.mk first
+echo "--- Fixing BoardConfig.mk... ---"
 if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
-    debug_log "Removing export statements from BoardConfig.mk..."
-    
-    # Create a backup
     cp "$DEVICE_PATH/BoardConfig.mk" "$DEVICE_PATH/BoardConfig.mk.bak"
     
-    # Remove lines with export or convert them to regular assignments
-    sed -i 's/^export //g' "$DEVICE_PATH/BoardConfig.mk"
+    # Remove all problematic lines
+    sed -i '/^export /d' "$DEVICE_PATH/BoardConfig.mk"
+    sed -i '/TW_THEME/d' "$DEVICE_PATH/BoardConfig.mk"
     
-    # Also remove any TW_THEME line that might cause issues
-    sed -i '/^TW_THEME/d' "$DEVICE_PATH/BoardConfig.mk"
-    
-    # Add TW_THEME at the end without export
-    echo "" >> "$DEVICE_PATH/BoardConfig.mk"
-    echo "# Theme" >> "$DEVICE_PATH/BoardConfig.mk"
-    echo "TW_THEME := portrait_hdpi" >> "$DEVICE_PATH/BoardConfig.mk"
+    # Append clean configuration
+    cat >> "$DEVICE_PATH/BoardConfig.mk" << 'BOARD_EOF'
+
+# Platform
+TARGET_BOARD_PLATFORM := mt6765
+TARGET_BOOTLOADER_BOARD_NAME := mt6765
+
+# Architecture
+TARGET_ARCH := arm
+TARGET_ARCH_VARIANT := armv7-a-neon
+TARGET_CPU_ABI := armeabi-v7a
+TARGET_CPU_ABI2 := armeabi
+TARGET_CPU_VARIANT := generic
+
+# Kernel
+BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,32N2
+BOARD_KERNEL_BASE := 0x40078000
+BOARD_KERNEL_PAGESIZE := 2048
+BOARD_KERNEL_OFFSET := 0x00008000
+BOARD_RAMDISK_OFFSET := 0x07c08000
+BOARD_KERNEL_TAGS_OFFSET := 0x0bc08000
+BOARD_FLASH_BLOCK_SIZE := 131072
+BOARD_BOOTIMG_HEADER_VERSION := 2
+BOARD_KERNEL_IMAGE_NAME := Image.gz
+
+# Partitions
+BOARD_FLASH_BLOCK_SIZE := 131072
+BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
+BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432
+
+# Dynamic Partitions
+BOARD_SUPER_PARTITION_SIZE := 9126805504
+BOARD_SUPER_PARTITION_GROUPS := infinix_dynamic_partitions
+BOARD_INFINIX_DYNAMIC_PARTITIONS_PARTITION_LIST := system vendor product system_ext
+BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE := 9122611200
+
+# File systems
+BOARD_HAS_LARGE_FILESYSTEM := true
+BOARD_SYSTEMIMAGE_PARTITION_TYPE := ext4
+BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
+BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+TARGET_USERIMAGES_USE_EXT4 := true
+TARGET_USERIMAGES_USE_F2FS := true
+TARGET_COPY_OUT_VENDOR := vendor
+
+# A/B
+AB_OTA_UPDATER := true
+BOARD_USES_RECOVERY_AS_BOOT := true
+BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
+
+# TWRP Configuration
+TW_THEME := portrait_hdpi
+RECOVERY_SDCARD_ON_DATA := true
+TW_EXCLUDE_DEFAULT_USB_INIT := true
+TW_EXTRA_LANGUAGES := true
+TW_SCREEN_BLANK_ON_BOOT := true
+TW_INPUT_BLACKLIST := "hbtp_vm"
+TW_USE_TOOLBOX := true
+TW_INCLUDE_REPACKTOOLS := true
+TW_INCLUDE_RESETPROP := true
+TW_INCLUDE_LIBRESETPROP := true
+TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
+TW_MAX_BRIGHTNESS := 2047
+TW_DEFAULT_BRIGHTNESS := 1200
+
+# Debug flags
+TWRP_INCLUDE_LOGCAT := true
+TARGET_USES_LOGD := true
+
+# Crypto
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+TW_INCLUDE_FBE_METADATA_DECRYPT := true
+PLATFORM_SECURITY_PATCH := 2099-12-31
+VENDOR_SECURITY_PATCH := 2099-12-31
+PLATFORM_VERSION := 16.1.0
+TW_USE_FSCRYPT_POLICY := 1
+
+# Additional flags
+TW_NO_SCREEN_BLANK := true
+TW_EXCLUDE_APEX := true
+BOARD_EOF
 fi
 
-# Fix device tree makefiles
-echo "--- Fixing device tree makefiles... ---"
+# Create proper makefiles
+echo "--- Creating makefiles... ---"
 cd $DEVICE_PATH
 
-# Fix the twrp makefile - remove or replace problematic includes
-if [ -f "twrp_${DEVICE_CODENAME}.mk" ]; then
-    debug_log "Fixing twrp_${DEVICE_CODENAME}.mk..."
-    
-    # Remove the problematic embedded.mk include and replace with proper TWRP includes
-    sed -i '/embedded\.mk/d' "twrp_${DEVICE_CODENAME}.mk"
-    sed -i '/core_64_bit\.mk/d' "twrp_${DEVICE_CODENAME}.mk"
-    sed -i '/full_base_telephony\.mk/d' "twrp_${DEVICE_CODENAME}.mk"
-    
-    # Create a proper twrp makefile
-    cat > "twrp_${DEVICE_CODENAME}.mk" << EOF
-# Copyright (C) 2025 The Android Open Source Project
-# Copyright (C) 2025 TeamWin Recovery Project
-# Copyright (C) 2025 OrangeFox Recovery Project
-
+# Create twrp makefile - REMOVING the duplicate ro.build.date.utc
+cat > "twrp_${DEVICE_CODENAME}.mk" << EOF
 # Inherit from those products. Most specific first.
 \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
 \$(call inherit-product, \$(SRC_TARGET_DIR)/product/aosp_base.mk)
 
 # Inherit from our custom product configuration
 \$(call inherit-product, vendor/twrp/config/common.mk)
-
-# Inherit from device
-\$(call inherit-product-if-exists, device/infinix/${DEVICE_CODENAME}/device.mk)
 
 # Device identifier
 PRODUCT_DEVICE := ${DEVICE_CODENAME}
@@ -264,36 +248,19 @@ PRODUCT_BRAND := Infinix
 PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
 PRODUCT_MANUFACTURER := Infinix
 
-# HACK: Set vendor patch level
+# Remove duplicate date properties - let the build system handle it
 PRODUCT_PROPERTY_OVERRIDES += \\
-    ro.vendor.build.security_patch=2099-12-31 \\
-    ro.bootimage.build.date.utc=0 \\
-    ro.build.date.utc=0
+    ro.vendor.build.security_patch=2099-12-31
 EOF
-fi
 
-# Also fix omni makefile if it exists
-if [ -f "omni_${DEVICE_CODENAME}.mk" ]; then
-    debug_log "Fixing omni_${DEVICE_CODENAME}.mk..."
-    
-    sed -i '/embedded\.mk/d' "omni_${DEVICE_CODENAME}.mk"
-    sed -i '/core_64_bit\.mk/d' "omni_${DEVICE_CODENAME}.mk"
-    sed -i '/full_base_telephony\.mk/d' "omni_${DEVICE_CODENAME}.mk"
-    
-    # Update omni makefile
-    cat > "omni_${DEVICE_CODENAME}.mk" << EOF
-# Copyright (C) 2025 The Android Open Source Project
-# Copyright (C) 2025 TeamWin Recovery Project
-
+# Create omni makefile - REMOVING the duplicate ro.build.date.utc
+cat > "omni_${DEVICE_CODENAME}.mk" << EOF
 # Inherit from those products. Most specific first.
 \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
 \$(call inherit-product, \$(SRC_TARGET_DIR)/product/aosp_base.mk)
 
 # Inherit from our custom product configuration
 \$(call inherit-product, vendor/twrp/config/common.mk)
-
-# Inherit from device
-\$(call inherit-product-if-exists, device/infinix/${DEVICE_CODENAME}/device.mk)
 
 # Device identifier
 PRODUCT_DEVICE := ${DEVICE_CODENAME}
@@ -302,223 +269,122 @@ PRODUCT_BRAND := Infinix
 PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
 PRODUCT_MANUFACTURER := Infinix
 
+# Remove duplicate date properties
 PRODUCT_PROPERTY_OVERRIDES += \\
     ro.vendor.build.security_patch=2099-12-31
 EOF
-fi
 
-# Update AndroidProducts.mk
-debug_log "Updating AndroidProducts.mk..."
+# Create AndroidProducts.mk
 cat > AndroidProducts.mk << EOF
 PRODUCT_MAKEFILES := \\
     \$(LOCAL_DIR)/twrp_${DEVICE_CODENAME}.mk \\
     \$(LOCAL_DIR)/omni_${DEVICE_CODENAME}.mk
 
 COMMON_LUNCH_CHOICES := \\
-    twrp_${DEVICE_CODENAME}-user \\
-    twrp_${DEVICE_CODENAME}-userdebug \\
     twrp_${DEVICE_CODENAME}-eng \\
     omni_${DEVICE_CODENAME}-eng
 EOF
 
-# Ensure device.mk exists
-if [ ! -f "device.mk" ]; then
-    debug_log "Creating device.mk..."
-    cat > device.mk << EOF
-# Device Path
-LOCAL_PATH := device/infinix/${DEVICE_CODENAME}
+# Create device.mk (empty for now)
+touch device.mk
 
-# A/B
-AB_OTA_UPDATER := true
+# Create Android.mk
+cat > Android.mk << 'EOF'
+LOCAL_PATH := $(call my-dir)
 
-# Boot
-BOARD_BOOT_HEADER_VERSION := 2
-
-# Dynamic Partitions
-PRODUCT_USE_DYNAMIC_PARTITIONS := true
-
-# Fastbootd
-PRODUCT_PACKAGES += \\
-    android.hardware.fastboot@1.0-impl-mock \\
-    fastbootd
-
-# API
-PRODUCT_TARGET_VNDK_VERSION := 30
-PRODUCT_SHIPPING_API_LEVEL := 30
-
-# Screen
-TARGET_SCREEN_HEIGHT := 2400
-TARGET_SCREEN_WIDTH := 1080
-
-# Soong namespaces
-PRODUCT_SOONG_NAMESPACES += \\
-    \$(LOCAL_PATH)
-
-# Recovery
-PRODUCT_COPY_FILES += \\
-    \$(LOCAL_PATH)/recovery/root/system/etc/recovery.fstab:\$(TARGET_RECOVERY_ROOT_OUT)/system/etc/recovery.fstab
+ifeq ($(TARGET_DEVICE),X6512)
+include $(call all-subdir-makefiles,$(LOCAL_PATH))
+endif
 EOF
-else
-    # Just make sure device.mk doesn't have export statements
-    sed -i 's/^export //g' device.mk
-    
-    # Add recovery.fstab copy rule if not present
-    if ! grep -q "recovery.fstab" device.mk; then
-        echo "" >> device.mk
-        echo "# Recovery" >> device.mk
-        echo "PRODUCT_COPY_FILES += \\" >> device.mk
-        echo "    \$(LOCAL_PATH)/recovery/root/system/etc/recovery.fstab:\$(TARGET_RECOVERY_ROOT_OUT)/system/etc/recovery.fstab" >> device.mk
-    fi
-fi
 
-cd $WORK_DIR
+# Create Android.bp
+cat > Android.bp << 'EOF'
+soong_namespace {
+}
+EOF
 
-# Apply touchscreen fixes
-echo "--- Applying touchscreen fixes... ---"
-debug_log "Fixing touchscreen driver: omnivision_tcm_spi (spi2.0)"
+# Fix recovery.fstab issue
+echo "--- Setting up recovery filesystem structure... ---"
+mkdir -p recovery/root/{system/etc,etc,sbin,vendor/lib/modules}
 
-mkdir -p $DEVICE_PATH/recovery/root/sbin
-mkdir -p $DEVICE_PATH/recovery/root/vendor/lib/modules
+# Create recovery.fstab in all required locations
+cat > recovery.fstab << 'FSTAB_EOF'
+# mount point    fstype    device                                        flags
+/system          ext4      /dev/block/mapper/system                     flags=display="System";logical
+/vendor          ext4      /dev/block/mapper/vendor                     flags=display="Vendor";logical
+/product         ext4      /dev/block/mapper/product                    flags=display="Product";logical
+/system_ext      ext4      /dev/block/mapper/system_ext                 flags=display="System_ext";logical
+/boot            emmc      /dev/block/by-name/boot                      flags=display="Boot";backup=1;flashimg=1
+/recovery        emmc      /dev/block/by-name/recovery                  flags=display="Recovery";backup=1;flashimg=1
+/data            f2fs      /dev/block/by-name/userdata                  flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized
+/cache           ext4      /dev/block/by-name/cache                     flags=display="Cache"
+/metadata        ext4      /dev/block/by-name/metadata                  flags=display="Metadata"
+/persist         ext4      /dev/block/by-name/persist                   flags=display="Persist"
+/misc            emmc      /dev/block/by-name/misc                      flags=display="Misc"
 
-# Create touchscreen fix script
-cat > $DEVICE_PATH/recovery/root/sbin/fix_touch.sh << 'TOUCH_EOF'
-#!/sbin/sh
-# Touchscreen fix for omnivision_tcm_spi
+# Removable storage
+/external_sd     auto      /dev/block/mmcblk1p1                         flags=display="MicroSD";storage;wipeingui;removable
+/usb_otg         auto      /dev/block/sda1                              flags=display="USB Storage";storage;wipeingui;removable
+FSTAB_EOF
 
-echo "Fixing touchscreen..."
+# Copy to all locations
+cp recovery.fstab recovery/root/system/etc/recovery.fstab
+cp recovery.fstab recovery/root/etc/recovery.fstab
+cp recovery.fstab recovery/root/etc/twrp.fstab
 
-# Load module if exists
-if [ -f /vendor/lib/modules/omnivision_tcm_spi.ko ]; then
-    insmod /vendor/lib/modules/omnivision_tcm_spi.ko
-fi
-
-# Enable touchscreen
-if [ -d /sys/bus/spi/devices/spi2.0 ]; then
-    echo 1 > /sys/bus/spi/devices/spi2.0/input/input0/enabled 2>/dev/null
-fi
-
-# Force enable ADB
-setprop persist.sys.usb.config adb
-setprop persist.service.adb.enable 1
-setprop persist.service.debuggable 1
-setprop ro.adb.secure 0
-setprop ro.secure 0
-start adbd
-
-exit 0
-TOUCH_EOF
-
-chmod +x $DEVICE_PATH/recovery/root/sbin/fix_touch.sh
-
-# Create init rc for recovery
-cat > $DEVICE_PATH/recovery/root/init.recovery.${DEVICE_CODENAME}.rc << 'INIT_EOF'
+# Create init files
+cat > recovery/root/init.recovery.${DEVICE_CODENAME}.rc << 'INIT_EOF'
 on init
-    # Enable ADB
     setprop sys.usb.config adb
     setprop persist.sys.usb.config adb
     setprop persist.service.adb.enable 1
     setprop persist.service.debuggable 1
     setprop ro.adb.secure 0
-    setprop ro.secure 0
-    
-on boot
-    # Fix touchscreen
-    exec u:r:recovery:s0 -- /sbin/fix_touch.sh
-    
-    # Start ADB daemon
-    start adbd
 
-on property:ro.debuggable=0
-    setprop ro.debuggable 1
-    restart adbd
+on boot
+    start adbd
 INIT_EOF
 
-# Update vendorsetup.sh (Keep exports here as they're for shell environment, not make)
-echo "--- Setting up OrangeFox build variables... ---"
-cat > $DEVICE_PATH/vendorsetup.sh << VENDOR_EOF
-# OrangeFox Configuration - These are shell environment variables
+# Create vendorsetup.sh - WITHOUT setting ro.build.date.utc
+cat > vendorsetup.sh << VENDOR_EOF
 export FOX_USE_BASH_SHELL=1
 export FOX_ASH_IS_BASH=1
 export FOX_USE_NANO_EDITOR=1
 export OF_ENABLE_LPTOOLS=1
-
-# A/B device configuration
 export FOX_AB_DEVICE=1
 export FOX_VIRTUAL_AB_DEVICE=1
 export FOX_RECOVERY_BOOT_PARTITION="/dev/block/by-name/boot"
-
-# Dynamic partitions
 export OF_DYNAMIC_PARTITIONS=1
-
-# UI Configuration
 export OF_ALLOW_DISABLE_NAVBAR=0
 export OF_STATUS_INDENT_LEFT=48
 export OF_STATUS_INDENT_RIGHT=48
 export OF_HIDE_NOTCH=1
 export OF_CLOCK_POS=1
 export OF_SCREEN_H=2400
-
-# Enable navigation without touchscreen
-export TW_USE_MOUSE_INPUT=1
-export TW_ENABLE_VIRTUAL_MOUSE=1
-export TW_HAS_USB_STORAGE=1
-
-# Force enable ADB
 export OF_FORCE_ENABLE_ADB=1
 export OF_SKIP_ADB_SECURE=1
-
-# Build configuration
 export FOX_RECOVERY_INSTALL_PARTITION="boot"
 export OF_MAINTAINER="manusia"
 export FOX_BUILD_TYPE="Unofficial"
 export FOX_VERSION="R11.1"
-
-# Features
 export OF_USE_GREEN_LED=0
 export FOX_DELETE_AROMAFM=1
 export FOX_ENABLE_APP_MANAGER=1
 export OF_FBE_METADATA_MOUNT_IGNORE=1
 export OF_PATCH_AVB20=1
-
-# Debug mode
 export OF_DEBUG_MODE=1
+
+# Don't override build date - let the system handle it
+export FOX_REPLACE_BOOTIMAGE_DATE=0
+export FOX_BUGGED_AOSP_ARB_WORKAROUND=""
 
 echo "OrangeFox build variables loaded for ${DEVICE_CODENAME}"
 VENDOR_EOF
 
-# Update BoardConfig.mk - Add touchscreen configs without export
-echo "--- Updating BoardConfig.mk... ---"
-if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
-    # Check if touchscreen configs already exist
-    if ! grep -q "RECOVERY_TOUCHSCREEN" "$DEVICE_PATH/BoardConfig.mk"; then
-        cat >> $DEVICE_PATH/BoardConfig.mk << 'BOARD_EOF'
-
-# Touchscreen Configuration (no export)
-RECOVERY_TOUCHSCREEN_SWAP_XY := false
-RECOVERY_TOUCHSCREEN_FLIP_X := false
-RECOVERY_TOUCHSCREEN_FLIP_Y := false
-TW_INPUT_BLACKLIST := "hbtp_vm"
-
-# Navigation support
-BOARD_HAS_NO_SELECT_BUTTON := true
-TW_HAS_USB_STORAGE := true
-
-# ADB Configuration
-TW_EXCLUDE_DEFAULT_USB_INIT := true
-
-# Debug
-TW_INCLUDE_LOGCAT := true
-TARGET_USES_LOGD := true
-
-# Recovery fstab
-TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
-BOARD_EOF
-    fi
-fi
+cd $WORK_DIR
 
 # Build recovery
 echo "--- Setting up build environment... ---"
-cd $WORK_DIR
 
 # Source build environment
 if [ -f "build/envsetup.sh" ]; then
@@ -532,21 +398,23 @@ else
     exit 1
 fi
 
-# Disable roomservice
+# Export additional variables - REMOVE duplicate date settings
 export DISABLE_ROOMSERVICE=1
+export ALLOW_MISSING_DEPENDENCIES=true
+export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+export LC_ALL=C
+
+# Unset any date override variables that might cause duplicates
+unset PRODUCT_BUILD_PROP_OVERRIDES
+unset ADDITIONAL_BUILD_PROPERTIES
 
 echo "--- Starting build process... ---"
 echo "Lunch target: twrp_${DEVICE_CODENAME}-eng"
 
-# Try lunch with error handling
-lunch twrp_${DEVICE_CODENAME}-eng || {
-    echo "[WARNING] twrp lunch failed, trying with omni..."
-    lunch omni_${DEVICE_CODENAME}-eng || {
-        echo "[ERROR] Lunch failed for both twrp and omni targets"
-        echo "Available lunch choices:"
-        lunch
-        exit 1
-    }
+# Try lunch
+lunch twrp_${DEVICE_CODENAME}-eng || lunch omni_${DEVICE_CODENAME}-eng || {
+    echo "[ERROR] Lunch failed!"
+    exit 1
 }
 
 # Clean previous builds
@@ -554,41 +422,48 @@ echo "--- Cleaning old builds... ---"
 make clean || true
 
 # Build recovery/boot image
-echo "--- Building $TARGET_RECOVERY_IMAGE image (this will take time)... ---"
+echo "--- Building $TARGET_RECOVERY_IMAGE image... ---"
 if [ "$TARGET_RECOVERY_IMAGE" = "boot" ]; then
     echo "Building boot image..."
-    mka bootimage -j$(nproc --all) 2>&1 | tee build.log
+    # Use make instead of mka to avoid property conflicts
+    make bootimage -j$(nproc --all) 2>&1 | tee build.log || {
+        echo "Build failed, checking for partial outputs..."
+    }
 else
     echo "Building recovery image..."
-    mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log
+    make recoveryimage -j$(nproc --all) 2>&1 | tee build.log || {
+        echo "Build failed, checking for partial outputs..."
+    }
 fi
 
 # Check build output
 echo "--- Checking build output... ---"
 OUTPUT_DIR="out/target/product/$DEVICE_CODENAME"
 
-if [ -f "$OUTPUT_DIR/boot.img" ]; then
-    echo -e "${GREEN}[SUCCESS]${NC} Boot image built successfully!"
-    echo "Location: $OUTPUT_DIR/boot.img"
+# Check multiple possible locations
+POSSIBLE_OUTPUTS=(
+    "$OUTPUT_DIR/boot.img"
+    "$OUTPUT_DIR/recovery.img"
+    "$OUTPUT_DIR/recovery/root/boot.img"
+    "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/boot.img"
+    "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/recovery.img"
+)
+
+OUTPUT_FOUND=""
+for OUTPUT in "${POSSIBLE_OUTPUTS[@]}"; do
+    if [ -f "$OUTPUT" ] || ls $OUTPUT 2>/dev/null; then
+        OUTPUT_FOUND=$(ls $OUTPUT 2>/dev/null | head -1)
+        break
+    fi
+done
+
+if [ -n "$OUTPUT_FOUND" ]; then
+    echo -e "${GREEN}[SUCCESS]${NC} Image built successfully!"
+    echo "Location: $OUTPUT_FOUND"
     
     # Create output directory
     mkdir -p /tmp/cirrus-ci-build/output
-    cp $OUTPUT_DIR/boot.img /tmp/cirrus-ci-build/output/OrangeFox-${FOX_VERSION:-R11.1}-${DEVICE_CODENAME}-$(date +%Y%m%d).img
-    
-    # Generate checksums
-    cd /tmp/cirrus-ci-build/output
-    sha256sum *.img > sha256sums.txt
-    md5sum *.img > md5sums.txt
-    
-    echo "Output files:"
-    ls -lah /tmp/cirrus-ci-build/output/
-elif [ -f "$OUTPUT_DIR/recovery.img" ]; then
-    echo -e "${GREEN}[SUCCESS]${NC} Recovery image built successfully!"
-    echo "Location: $OUTPUT_DIR/recovery.img"
-    
-    # Create output directory
-    mkdir -p /tmp/cirrus-ci-build/output
-    cp $OUTPUT_DIR/recovery.img /tmp/cirrus-ci-build/output/OrangeFox-${FOX_VERSION:-R11.1}-${DEVICE_CODENAME}-$(date +%Y%m%d).img
+    cp "$OUTPUT_FOUND" /tmp/cirrus-ci-build/output/OrangeFox-${FOX_VERSION:-R11.1}-${DEVICE_CODENAME}-$(date +%Y%m%d).img
     
     # Generate checksums
     cd /tmp/cirrus-ci-build/output
@@ -604,6 +479,11 @@ else
     echo ""
     echo "Last 100 lines of build.log:"
     tail -100 build.log
+    
+    # Show actual error
+    echo ""
+    echo "Searching for actual error in log:"
+    grep -i "error\|failed" build.log | tail -20
     exit 1
 fi
 
