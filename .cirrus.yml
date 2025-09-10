@@ -30,13 +30,15 @@ task:
       EOL
     # Update package lists
     - apt-get update -y
-    # Install required packages (fixed formatting)
+    # Install SSH and required packages (PENTING: tambahkan openssh-client)
     - |
       apt-get install -y --no-install-recommends \
       ca-certificates \
       git \
       curl \
       wget \
+      openssh-client \
+      ssh \
       unzip \
       zip \
       rsync \
@@ -80,7 +82,7 @@ task:
       tk-dev
     # Install python-is-python3 if available
     - apt-get install -y python-is-python3 || ln -sf /usr/bin/python3 /usr/bin/python
-    # Install android tools (alternative method since android-sdk-libsparse-utils might not be available)
+    # Install android tools
     - |
       apt-get install -y android-tools-fsutils || true
       apt-get install -y android-sdk-libsparse-utils || true
@@ -88,10 +90,16 @@ task:
     # Install repo tool
     - curl -s https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
     - chmod +x /usr/local/bin/repo
-    # Configure git
-    - git config --global user.name "manusia"
-    - git config --global user.email "ndktau@gmail.com"
-    - git config --global color.ui false
+    # Configure git with proper credentials
+    - |
+      git config --global user.name "manusia"
+      git config --global user.email "ndktau@gmail.com"
+      git config --global color.ui false
+      # PENTING: Set git to use https instead of ssh for GitLab
+      git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
+      git config --global url."https://".insteadOf "git://"
+      # Disable SSL verification for GitLab (temporary workaround)
+      git config --global http.sslVerify false
     # Create necessary directories
     - mkdir -p /tmp/ccache
     - mkdir -p /tmp/cirrus-ci-build
@@ -102,6 +110,8 @@ task:
     - export USE_CCACHE=1
     - export CCACHE_DIR="/tmp/ccache"
     - export ALLOW_MISSING_DEPENDENCIES=true
+    # PENTING: Force use HTTPS instead of SSH
+    - export USE_SSH=0
     - ccache -M 20G || true
     - echo "[DEBUG] Current directory: $(pwd)"
     - echo "[DEBUG] Current directory files:" && ls -la
