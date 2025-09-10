@@ -1,147 +1,130 @@
 #!/bin/bash
 #
-# Skrip Build TWRP - VERSI OTOMATIS FINAL (Fixed for TWRP + Skip VTS)
-# =================================================================
+# Skrip Build OrangeFox Recovery - VERSI OTOMATIS FINAL
+# =======================================================================
+# Dibuat berdasarkan skrip TWRP, dimodifikasi untuk OrangeFox.
+# Asumsi: BoardConfig.mk di device tree sudah disesuaikan untuk OrangeFox.
+# =======================================================================
 
 set -e
 
+# --- [BAGIAN 1: Konfigurasi Awal] ---
 # Parse args dari .cirrus (DEVICE_TREE DEVICE_BRANCH DEVICE_CODENAME MANIFEST_BRANCH TARGET_RECOVERY_IMAGE)
 DEVICE_TREE_URL="$1"
 DEVICE_TREE_BRANCH="$2"
 DEVICE_CODENAME="$3"
 MANIFEST_BRANCH="$4"
-BUILD_TARGET="$5"  # e.g., boot
+BUILD_TARGET="$5"
 
-# Defaults jika kosong
-MANIFEST_BRANCH="${MANIFEST_BRANCH:-twrp-11}"
+# --- [DIUBAH] Defaults disesuaikan untuk OrangeFox ---
+MANIFEST_BRANCH="${MANIFEST_BRANCH:-fox_11.0}" # Default ke branch Android 11 OrangeFox
 DEVICE_TREE_URL="${DEVICE_TREE_URL:-https://github.com/manusia251/twrp-test.git}"
 DEVICE_TREE_BRANCH="${DEVICE_TREE_BRANCH:-main}"
 DEVICE_CODENAME="${DEVICE_CODENAME:-X6512}"
-BUILD_TARGET="${BUILD_TARGET:-boot}"
+BUILD_TARGET="${BUILD_TARGET:-recovery}" # Target umum untuk recovery adalah 'recovery'
 VENDOR_NAME="infinix"
 
+# --- [BARU] Variabel untuk info build OrangeFox ---
+# Variabel ini akan digunakan di beberapa tempat
+export FOX_VERSION="R12.1_1" # Sesuaikan versinya jika perlu
+export FOX_BUILD_TYPE="Stable"    # Bisa juga "Beta"
+
 echo "========================================"
-echo "Memulai Build TWRP"
+echo "Memulai Build OrangeFox Recovery"
 echo "----------------------------------------"
-echo "Manifest Branch   : ${MANIFEST_BRANCH}"
-echo "Device Tree URL   : ${DEVICE_TREE_URL}"
-echo "Device Branch     : ${DEVICE_TREE_BRANCH}"
-echo "Device Codename   : ${DEVICE_CODENAME}"
-echo "Build Target      : ${BUILD_TARGET}image"
+echo "Manifest Branch  : ${MANIFEST_BRANCH}"
+echo "Device Tree URL  : ${DEVICE_TREE_URL}"
+echo "Device Branch    : ${DEVICE_TREE_BRANCH}"
+echo "Device Codename  : ${DEVICE_CODENAME}"
+echo "Build Target     : ${BUILD_TARGET}image"
+echo "Versi OrangeFox  : ${FOX_VERSION}"
 echo "========================================"
 
-# Variabel tambahan
+# --- [BAGIAN 2: Persiapan Lingkungan] ---
 WORKDIR=$(pwd)
 export GITHUB_WORKSPACE=$WORKDIR
 
-# --- 2. Persiapan Lingkungan Build ---
-echo "--- Berada di direktori $(pwd) ---"
-echo "--- Membuat dan masuk ke direktori twrp... ---"
+echo "--- Membuat dan masuk ke direktori build... ---"
+# [DIUBAH] Nama folder menjadi 'orangefox' agar lebih jelas
 cd ..
-mkdir -p "$WORKDIR/twrp"
-cd "$WORKDIR/twrp"
+mkdir -p "$WORKDIR/orangefox"
+cd "$WORKDIR/orangefox"
 echo "--- Direktori saat ini: $(pwd) ---"
 
 git config --global user.name "manusia251"
 git config --global user.email "darkside@gmail.com"
 
-# --- 3. Inisialisasi dan Konfigurasi Repo ---
-echo "--- Langkah 1: Inisialisasi manifest TWRP... ---"
-repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${MANIFEST_BRANCH}
+# --- [BAGIAN 3: Sinkronisasi Source Code] ---
+echo "--- Langkah 1: Inisialisasi manifest OrangeFox... ---"
+# [DIUBAH] Menggunakan manifest resmi OrangeFox
+repo init -u https://gitlab.com/OrangeFox/Manifest.git -b ${MANIFEST_BRANCH}
 
 echo "--- Langkah 2: Membuat local manifest untuk device tree... ---"
 mkdir -p .repo/local_manifests
-cat > .repo/local_manifests/twrp_device_tree.xml << EOF
+cat > .repo/local_manifests/orangefox_device_tree.xml << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
     <project name="${DEVICE_TREE_URL#https://github.com/}" path="device/${VENDOR_NAME}/${DEVICE_CODENAME}" remote="github" revision="${DEVICE_TREE_BRANCH}" />
 </manifest>
 EOF
 
-echo "--- Langkah 3: Memulai sinkronisasi repositori. Mohon tunggu... ---"
-repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+echo "--- Langkah 3: Memulai sinkronisasi repositori. Ini mungkin butuh waktu lama... ---"
+repo sync -c --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 echo "--- Sinkronisasi selesai. ---"
 
-# --- Patch Skip VTS - IMPROVED VERSION ---
-echo "--- Applying VTS patches... ---"
+# --- [BAGIAN 4: Proses Kompilasi] ---
+echo "--- Langkah 4: Memulai proses kompilasi... ---"
+source build/envsetup.sh
 
-# Patch 1: Comment out include Android.host_config.mk di frameworks/base/core/xsd/vts/Android.mk
-if [ -f "frameworks/base/core/xsd/vts/Android.mk" ]; then
-    echo "--- Patching frameworks/base/core/xsd/vts/Android.mk ---"
-    sed -i 's|include $(TOP)/test/vts/tools/build/Android.host_config.mk|# &|' frameworks/base/core/xsd/vts/Android.mk
-    echo "--- VTS patch applied: Android.host_config.mk include commented out ---"
-fi
+# --- [DIUBAH] Variabel khusus untuk build OrangeFox ---
+# Variabel dari BoardConfig.mk biasanya sudah cukup, tapi ini untuk memastikan
+export ALLOW_MISSING_DEPENDENCIES=true
+export LC_ALL="C"
+export OF_MAINTAINER="manusia251" # Pastikan sama dengan di BoardConfig.mk
+# Variabel FOX_VERSION dan FOX_BUILD_TYPE sudah di-export di atas
 
-# Patch 2: Comment out seluruh blok VTS di frameworks/base/Android.mk jika ada
-if [ -f "frameworks/base/Android.mk" ]; then
-    echo "--- Checking frameworks/base/Android.mk for VTS references ---"
-    if grep -q "core/xsd/vts" frameworks/base/Android.mk; then
-        sed -i 's|include $(LOCAL_PATH)/core/xsd/vts/Android.mk|# &|' frameworks/base/Android.mk
-        echo "--- VTS include in frameworks/base/Android.mk commented out ---"
-    fi
-fi
-
-# Patch 3: Buat dummy file jika masih diperlukan
-if [ ! -f "test/vts/tools/build/Android.host_config.mk" ]; then
-    echo "--- Creating dummy VTS config file ---"
-    mkdir -p test/vts/tools/build
-    cat > test/vts/tools/build/Android.host_config.mk << 'DUMMY_EOF'
-# Dummy VTS config file - auto-generated by build script
-# This file is created to prevent build errors when VTS is not available
-
-# Empty VTS configuration - all VTS related builds are disabled
-DUMMY_EOF
-    echo "--- Dummy VTS config file created ---"
-fi
-
-# Patch 4: Skip VTS tests dengan environment variable
+# Variabel tambahan untuk skip komponen yang tidak perlu & atasi error
+export BOARD_HAVE_BLUETOOTH=false
+export TARGET_SKIP_VTS_BUILD=true
 export SKIP_VTS_BUILD=true
 export DISABLE_VTS_BUILD=true
 
-# --- 4. Verifikasi Device Tree ---
-echo "--- Langkah 4: Memeriksa keberadaan device tree... ---"
-if [ -d "device/${VENDOR_NAME}/${DEVICE_CODENAME}" ] && [ -f "device/${VENDOR_NAME}/${DEVICE_CODENAME}/AndroidProducts.mk" ] && [ -f "device/${VENDOR_NAME}/${DEVICE_CODENAME}/vendorsetup.sh" ]; then
-    echo "--- Device tree ditemukan dan lengkap. Lokasi: device/${VENDOR_NAME}/${DEVICE_CODENAME} ---"
-else
-    echo "--- ERROR: Device tree TIDAK DITEMUKAN atau file kunci hilang (AndroidProducts.mk/vendorsetup.sh). Cek repo. ---"
-    exit 1
-fi
+echo "--- Menjalankan lunch untuk omni_${DEVICE_CODENAME}-eng... ---"
+lunch omni_${DEVICE_CODENAME}-eng
 
-# HAPUS BAGIAN KERNEL CHECK YANG LAMA KARENA SUDAH DIGANTIKAN AUTO-DEBUG
+echo "--- Menjalankan make ${BUILD_TARGET}image... ---"
+mka ${BUILD_TARGET}image
 
-# --- 5. Proses Kompilasi ---
-echo "--- Langkah 5: Memulai proses kompilasi... ---"
-source build/envsetup.sh
-export ALLOW_MISSING_DEPENDENCIES=true
-export OF_PATH=${PWD}  # Legacy, tapi OK untuk TWRP
-export RECOVERY_VARIANT=twrp
-
-# Additional build environment variables to skip problematic components
-export BOARD_HAVE_BLUETOOTH=false
-export TARGET_SKIP_VTS_BUILD=true
-
-echo "--- Menjalankan lunch... ---"
-lunch omni_${DEVICE_CODENAME}-eng  # Kunci: omni_, bukan twrp_
-echo "--- Menjalankan make... ---"
-mka ${BUILD_TARGET}image  # e.g., bootimage
-
-# --- 6. Persiapan Hasil Build ---
-echo "--- Langkah 6: Menyiapkan hasil build... ---"
-RESULT_DIR="$WORKDIR/twrp/out/target/product/${DEVICE_CODENAME}"
+# --- [BAGIAN 5: Persiapan Hasil Build] ---
+echo "--- Langkah 5: Menyiapkan hasil build... ---"
+RESULT_DIR="$WORKDIR/orangefox/out/target/product/${DEVICE_CODENAME}"
 OUTPUT_DIR="$WORKDIR/output"
 mkdir -p "$OUTPUT_DIR"
 
-if [ -f "$RESULT_DIR/boot.img" ] || [ -f "$RESULT_DIR/${BUILD_TARGET}.img" ] || [ -f "$RESULT_DIR/recovery.img" ]; then
-    echo "--- File output TWRP ditemukan! Menyalin ke direktori output... ---"
-    cp -f "$RESULT_DIR/boot.img" "$OUTPUT_DIR/" 2>/dev/null || true
-    cp -f "$RESULT_DIR/${BUILD_TARGET}.img" "$OUTPUT_DIR/" 2>/dev/null || true
-    cp -f "$RESULT_DIR/recovery.img" "$OUTPUT_DIR/" 2>/dev/null || true
+# --- [DIUBAH] Logika untuk mencari file output OrangeFox ---
+# Nama file output OrangeFox biasanya lebih spesifik
+ORANGEFOX_IMG_NAME="OrangeFox-${FOX_VERSION}-${FOX_BUILD_TYPE}-${DEVICE_CODENAME}.img"
+ORANGEFOX_ZIP_NAME="OrangeFox-${FOX_VERSION}-${FOX_BUILD_TYPE}-${DEVICE_CODENAME}.zip"
+GENERIC_RECOVERY_IMG="recovery.img"
+
+# Cek file output
+if [ -f "$RESULT_DIR/$ORANGEFOX_IMG_NAME" ] || [ -f "$RESULT_DIR/$GENERIC_RECOVERY_IMG" ]; then
+    echo "--- File output ditemukan! Menyalin ke direktori output... ---"
+    
+    # Salin file .img
+    cp -f "$RESULT_DIR/$ORANGEFOX_IMG_NAME" "$OUTPUT_DIR/" 2>/dev/null || true
+    cp -f "$RESULT_DIR/$GENERIC_RECOVERY_IMG" "$OUTPUT_DIR/" 2>/dev/null || true
+    
+    # Salin juga file .zip jika ada
+    cp -f "$RESULT_DIR/$ORANGEFOX_ZIP_NAME" "$OUTPUT_DIR/" 2>/dev/null || true
 else
-    echo "--- Peringatan: File output build tidak ditemukan di ${RESULT_DIR}. Cek log. ---"
+    echo "--- ERROR: File output build tidak ditemukan di ${RESULT_DIR}. Cek log kompilasi di atas. ---"
     exit 1
 fi
 
-# --- 7. Selesai ---
-echo "--- Build selesai! Cek folder output. ---"
+# --- [BAGIAN 6: Selesai] ---
+echo "--- Build sukses! Cek folder 'output' untuk file recovery. ---"
 ls -lh "$OUTPUT_DIR"
-echo "========================================"
+echo "============================================================"
+echo " Skrip Selesai "
+echo "============================================================"
