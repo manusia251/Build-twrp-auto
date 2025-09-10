@@ -13,15 +13,14 @@ set -e
 DEVICE_TREE_URL="$1"
 DEVICE_TREE_BRANCH="$2"
 DEVICE_CODENAME="$3"
-MANIFEST_BRANCH="$4"
+MANIFEST_BRANCH="fox_11.0"  # Hardcoded untuk Android 11
 BUILD_TARGET="$5"
 
 # --- [DIUBAH] Defaults disesuaikan untuk OrangeFox ---
-MANIFEST_BRANCH="${MANIFEST_BRANCH:-fox_11.0}" # Default ke branch Android 11 OrangeFox
 DEVICE_TREE_URL="${DEVICE_TREE_URL:-https://github.com/manusia251/twrp-test.git}"
 DEVICE_TREE_BRANCH="${DEVICE_TREE_BRANCH:-main}"
 DEVICE_CODENAME="${DEVICE_CODENAME:-X6512}"
-BUILD_TARGET="${BUILD_TARGET:-recovery}" # Target umum untuk recovery adalah 'recovery'
+BUILD_TARGET="${BUILD_TARGET:-boot}"  # Diubah ke boot untuk hasil boot.img
 VENDOR_NAME="infinix"
 
 # --- [BARU] Variabel untuk info build OrangeFox ---
@@ -105,7 +104,7 @@ mkdir -p "$OUTPUT_DIR"
 # Nama file output OrangeFox biasanya lebih spesifik
 ORANGEFOX_IMG_NAME="OrangeFox-${FOX_VERSION}-${FOX_BUILD_TYPE}-${DEVICE_CODENAME}.img"
 ORANGEFOX_ZIP_NAME="OrangeFox-${FOX_VERSION}-${FOX_BUILD_TYPE}-${DEVICE_CODENAME}.zip"
-GENERIC_RECOVERY_IMG="recovery.img"
+GENERIC_RECOVERY_IMG="boot.img"  # Diubah ke boot.img untuk target boot
 
 # Cek file output
 if [ -f "$RESULT_DIR/$ORANGEFOX_IMG_NAME" ] || [ -f "$RESULT_DIR/$GENERIC_RECOVERY_IMG" ]; then
