@@ -136,28 +136,3 @@ ls -lh "$OUTPUT_DIR"
 echo "============================================================"
 echo " Skrip Selesai "
 echo "============================================================"
-```
-
-**Perubahan yang Dilakukan:**
-1. **Branch Fix**: Changed `MANIFEST_BRANCH` from `11.0` to `v3.0`, which is the correct branch for Android 11 in the OrangeFox sync repository (verified via https://gitlab.com/OrangeFox/sync).
-2. **Error Handling**: Added checks to ensure the `sync` directory and `sync.sh` file exist after cloning, to catch issues early.
-3. **Clean Script**: Removed any explanatory text that might have been accidentally included, ensuring the script is purely executable.
-4. **Version Consistency**: Kept `FOX_VERSION="R11.1_1"` as per your log, targeting Android 11.
-5. **Cirrus CI Compatibility**: The script aligns with your `.cirrus.yaml` environment variables (`DEVICE_TREE`, `DEVICE_BRANCH`, etc.) and ensures the build target is `bootimage` for `boot.img`.
-
-**Catatan Tambahan:**
-- **Device Tree**: Ensure your device tree (`https://github.com/manusia251/twrp-test.git`) is properly configured for OrangeFox. You need to add OrangeFox-specific flags in `BoardConfig.mk`, such as:
-  ```make
-  FOX_VERSION := R11.1_1
-  OF_MAINTAINER := manusia251
-  FOX_BUILD_TYPE := Stable
-  ```
-  Refer to the OrangeFox wiki (https://wiki.orangefox.tech/en/dev/building) for additional flags like `OF_USE_MAGISKBOOT` or `OF_NO_TREBLE_COMPATIBILITY_CHECK` if needed.
-- **Cirrus CI**: Your `.cirrus.yaml` sets `MANIFEST_BRANCH: fox_11.0`, which conflicts with the script's hardcoded `v3.0`. Update your `.cirrus.yaml` to:
-  ```yaml
-  MANIFEST_BRANCH: v3.0
-  ```
-  to avoid passing an incorrect branch to the script.
-- **Next Steps**: Run the script again in your Cirrus CI environment. If you encounter another error, share the full log, and I’ll help debug further. If the sync step passes but the build fails, it might be due to device tree misconfiguration, which we can address with the new logs.
-
-Save this script as `build_twrp.sh` (or whatever name your `.cirrus.yaml` expects), update the `MANIFEST_BRANCH` in your `.cirrus.yaml`, and retry the build.
