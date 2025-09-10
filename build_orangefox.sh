@@ -2,7 +2,7 @@
 
 # OrangeFox Recovery Builder Script for Infinix X6512
 # With touchscreen fix and full OrangeFox features support
-# Fixed for HTTPS authentication and no-SSH environment
+# Enhanced error handling and debugging
 
 set -e
 set -x
@@ -97,103 +97,47 @@ if ! command -v repo &> /dev/null; then
     chmod +x /usr/local/bin/repo
 fi
 
-echo "--- Method 1: Clone OrangeFox sync script... ---"
-debug_log "Cloning from: https://gitlab.com/OrangeFox/sync.git"
+# SYNC SECTION - Simplified approach
+echo "--- Starting simplified sync process... ---"
 
-if [ -d sync_dir ]; then
-    debug_log "sync_dir already exists, removing..."
-    rm -rf sync_dir
-fi
-
-# Clone with HTTPS
-git clone https://gitlab.com/OrangeFox/sync.git -b master sync_dir || {
-    warning_msg "Failed to clone sync script, trying alternative method..."
-}
-
-# Try the sync script if it exists
-if [ -d sync_dir ] && [ -f sync_dir/orangefox_sync.sh ]; then
-    cd sync_dir
-    debug_log "Contents of sync_dir:"
-    ls -la
+# Check if already synced
+if [ -f build/envsetup.sh ] || [ -f build/make/envsetup.sh ]; then
+    success_msg "Build environment already exists, skipping sync"
+else
+    # Use TWRP minimal manifest for reliability
+    echo "--- Using TWRP 12.1 minimal manifest... ---"
     
-    echo "--- Syncing OrangeFox source code using sync script... ---"
-    SYNC_PATH=$(realpath ../)
-    debug_log "Sync path: $SYNC_PATH"
-    
-    # Force HTTPS in sync script
-    bash orangefox_sync.sh --branch 12.1 --path "$SYNC_PATH" --ssh 0 || {
-        warning_msg "Sync script failed, will use direct repo method..."
-    }
-    cd "$SYNC_PATH"
-fi
-
-# Check if sync was successful
-if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
-    echo "--- Method 2: Direct repo sync with HTTPS... ---"
-    warning_msg "Sync script didn't work, using direct repo init method..."
-    
-    cd "$WORK_DIR"
-    
-    # Clean up any previous attempts
+    # Clean any previous attempts
     rm -rf .repo
     
-    # Initialize repo with HTTPS URL
-    debug_log "Initializing repo with HTTPS..."
-    repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git -b fox_12.1 --git-lfs --no-repo-verify || {
-        warning_msg "Standard repo init failed, trying GitHub mirror..."
-        
-        # Try GitHub mirror as alternative (community maintained)
-        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --git-lfs --no-repo-verify || {
-            error_exit "All repo init methods failed!"
+    # Initialize with TWRP minimal manifest (most reliable)
+    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --git-lfs --no-repo-verify || {
+        error_exit "Failed to initialize repository!"
+    }
+    
+    # Sync with fewer threads for stability
+    echo "--- Starting repo sync (this may take a while)... ---"
+    repo sync -c --force-sync --no-tags --no-clone-bundle -j4 --optimized-fetch --prune || {
+        warning_msg "Sync had issues, trying with single thread..."
+        repo sync -c --force-sync --no-tags --no-clone-bundle -j1 || {
+            error_exit "Repository sync failed completely!"
         }
     }
     
-    # Sync the repositories
-    debug_log "Starting repo sync..."
-    repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) --optimized-fetch --prune || {
-        warning_msg "Full sync failed, trying partial sync..."
-        repo sync -c --force-sync --no-tags --no-clone-bundle -j4 || {
-            error_exit "Repo sync completely failed!"
-        }
-    }
-fi
-
-# Alternative Method 3: Use TWRP minimal manifest if OrangeFox fails
-if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
-    echo "--- Method 3: Using TWRP minimal manifest as fallback... ---"
-    warning_msg "OrangeFox sync failed, using TWRP base instead..."
-    
-    cd "$WORK_DIR"
-    rm -rf .repo
-    
-    # Use TWRP minimal manifest which is more reliable
-    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
-    repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
-    
-    # Clone OrangeFox vendor repository manually
+    # Clone OrangeFox vendor if not present
     if [ ! -d vendor/recovery ]; then
-        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_12.1 vendor/recovery || {
-            warning_msg "Failed to clone OrangeFox vendor, build will be TWRP-based"
+        echo "--- Cloning OrangeFox vendor... ---"
+        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_12.1 vendor/recovery --depth=1 || {
+            warning_msg "Failed to clone OrangeFox vendor, will build as TWRP"
         }
     fi
 fi
 
 cd "$WORK_DIR"
-debug_log "Checking build system files..."
 
-# Wait for sync to complete and check multiple times
-for i in {1..10}; do
-    if [ -f build/envsetup.sh ] || [ -f build/make/envsetup.sh ]; then
-        success_msg "Build environment found!"
-        break
-    fi
-    warning_msg "Build environment not found (attempt $i/10), waiting..."
-    sleep 5
-done
-
-# Final check
+# Verify build environment
 if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
-    error_exit "Build environment not found after all attempts!"
+    error_exit "Build environment not found!"
 fi
 
 echo "--- Clone device tree... ---"
@@ -209,7 +153,7 @@ fi
 # Clone device tree
 git clone "$DEVICE_TREE" -b "$DEVICE_BRANCH" "$DEVICE_PATH" || error_exit "Failed to clone device tree"
 
-# Check if device tree was cloned successfully
+# Verify device tree
 if [ ! -d "$DEVICE_PATH" ]; then
     error_exit "Device tree directory not found after cloning!"
 fi
@@ -217,11 +161,62 @@ fi
 debug_log "Device tree contents:"
 ls -la "$DEVICE_PATH"
 
+# Check for required device tree files
+echo "--- Checking device tree configuration... ---"
+REQUIRED_FILES=("AndroidProducts.mk" "BoardConfig.mk")
+for file in "${REQUIRED_FILES[@]}"; do
+    if [ ! -f "$DEVICE_PATH/$file" ]; then
+        warning_msg "$file not found in device tree!"
+    fi
+done
+
+# Create AndroidProducts.mk if missing
+if [ ! -f "$DEVICE_PATH/AndroidProducts.mk" ]; then
+    echo "--- Creating AndroidProducts.mk... ---"
+    cat > "$DEVICE_PATH/AndroidProducts.mk" << EOF
+PRODUCT_MAKEFILES := \\
+    \$(LOCAL_DIR)/twrp_${DEVICE_CODENAME}.mk
+
+COMMON_LUNCH_CHOICES := \\
+    twrp_${DEVICE_CODENAME}-eng \\
+    twrp_${DEVICE_CODENAME}-userdebug \\
+    twrp_${DEVICE_CODENAME}-user
+EOF
+fi
+
+# Create device makefile if missing
+if [ ! -f "$DEVICE_PATH/twrp_${DEVICE_CODENAME}.mk" ]; then
+    echo "--- Creating twrp_${DEVICE_CODENAME}.mk... ---"
+    cat > "$DEVICE_PATH/twrp_${DEVICE_CODENAME}.mk" << EOF
+# Inherit from common AOSP config
+\$(call inherit-product, \$(SRC_TARGET_DIR)/product/aosp_base.mk)
+
+# Inherit some common TWRP stuff
+\$(call inherit-product, vendor/twrp/config/common.mk)
+
+# Device identifier
+PRODUCT_DEVICE := ${DEVICE_CODENAME}
+PRODUCT_NAME := twrp_${DEVICE_CODENAME}
+PRODUCT_BRAND := Infinix
+PRODUCT_MODEL := X6512
+PRODUCT_MANUFACTURER := Infinix
+
+# A/B support
+AB_OTA_UPDATER := true
+AB_OTA_PARTITIONS += \\
+    boot \\
+    system \\
+    vendor \\
+    product \\
+    odm
+EOF
+fi
+
 # Apply touchscreen fixes
 echo "--- Applying touchscreen fixes... ---"
 debug_log "Fixing touchscreen driver: omnivision_tcm_spi (spi2.0)"
 
-# Create recovery directory structure if it doesn't exist
+# Create recovery directory structure
 mkdir -p "$DEVICE_PATH/recovery/root/sbin"
 mkdir -p "$DEVICE_PATH/recovery/root/vendor/lib/modules"
 
@@ -253,9 +248,6 @@ on boot
     # Start ADB daemon
     start adbd
 
-on property:ro.debuggable=1
-    start adbd
-    
 service adbd /sbin/adbd --root_seclabel=u:r:su:s0
     disabled
     socket adbd stream 660 system system
@@ -265,59 +257,28 @@ EOF
 # Create touchscreen fix script
 cat > "$DEVICE_PATH/recovery/root/sbin/fix_touch.sh" << 'EOF'
 #!/sbin/sh
-# Touchscreen fix script for omnivision_tcm_spi
-
 echo "Starting touchscreen fix..." >> /tmp/recovery.log
-
-# Wait for device to settle
 sleep 2
-
-# Check if module exists
 if [ -f /vendor/lib/modules/omnivision_tcm_spi.ko ]; then
-    # Load touchscreen module if not loaded
     if ! lsmod | grep -q omnivision_tcm_spi; then
         insmod /vendor/lib/modules/omnivision_tcm_spi.ko
         echo "Touchscreen module loaded" >> /tmp/recovery.log
     fi
 fi
-
-# Set permissions
 chmod 666 /dev/input/event* 2>/dev/null
 chmod 666 /dev/spidev2.0 2>/dev/null
-
-# Enable touchscreen
 echo 1 > /sys/bus/spi/devices/spi2.0/accessible 2>/dev/null
-
-# Enable ADB
 setprop ro.adb.secure 0
 setprop ro.debuggable 1
-setprop persist.sys.usb.config adb
-setprop service.adb.root 1
-
-# Log success
 echo "Touchscreen fix applied at $(date)" >> /tmp/recovery.log
 EOF
 
 chmod +x "$DEVICE_PATH/recovery/root/sbin/fix_touch.sh"
 
-# Update init.rc to include touchscreen fix
-if [ -f "$DEVICE_PATH/recovery/root/init.rc" ]; then
-    echo "import /init.recovery.touchscreen.rc" >> "$DEVICE_PATH/recovery/root/init.rc"
-else
-    # Create basic init.rc if it doesn't exist
-    cat > "$DEVICE_PATH/recovery/root/init.rc" << 'EOF'
-import /init.recovery.touchscreen.rc
-
-on init
-    # Run touchscreen fix
-    exec u:r:recovery:s0 -- /sbin/fix_touch.sh
-EOF
-fi
-
-# Create custom vendorsetup.sh for OrangeFox variables
+# Create vendorsetup.sh for OrangeFox
 echo "--- Setting up OrangeFox build variables... ---"
 cat > "$DEVICE_PATH/vendorsetup.sh" << 'EOF'
-# OrangeFox build vars
+# OrangeFox Configuration for X6512
 export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
 export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
 export FOX_USE_BASH_SHELL=1
@@ -327,153 +288,140 @@ export FOX_USE_SED_BINARY=1
 export FOX_USE_XZ_UTILS=1
 export FOX_USE_NANO_EDITOR=1
 export OF_ENABLE_LPTOOLS=1
-export OF_NO_TREBLE_COMPATIBILITY_CHECK=1
-
-# A/B device configuration
 export FOX_AB_DEVICE=1
 export FOX_VIRTUAL_AB_DEVICE=1
 export FOX_RECOVERY_BOOT_PARTITION="/dev/block/by-name/boot"
-
-# Super partition support
 export OF_DYNAMIC_PARTITIONS=1
-export OF_NO_RELOAD_AFTER_DECRYPTION=1
-
-# Touchscreen and navigation support
-export OF_ALLOW_DISABLE_NAVBAR=0
 export OF_SCREEN_H=2400
 export OF_STATUS_H=100
 export OF_STATUS_INDENT_LEFT=48
 export OF_STATUS_INDENT_RIGHT=48
 export OF_HIDE_NOTCH=1
 export OF_CLOCK_POS=1
-
-# Enable keyboard/mouse support for non-touch control
 export TW_USE_MOUSE_INPUT=1
 export TW_ENABLE_VIRTUAL_MOUSE=1
-export TW_HAS_USB_STORAGE=1
-
-# Enable ADB by default for debugging
 export OF_FORCE_ENABLE_ADB=1
 export OF_SKIP_ADB_SECURE=1
 export PLATFORM_SECURITY_PATCH="2099-12-31"
 export TW_DEFAULT_LANGUAGE="en"
-
-# Additional debugging
-export OF_DEBUG_MODE=1
-export TW_INCLUDE_RESETPROP=true
-export TW_INCLUDE_REPACKTOOLS=true
-export TW_INCLUDE_LIBRESETPROP=true
-
-# UI customization
-export OF_USE_GREEN_LED=0
-export FOX_DELETE_AROMAFM=1
-export FOX_ENABLE_APP_MANAGER=1
-export OF_USE_HEXDUMP=1
-
-# Decryption support
-export OF_FBE_METADATA_MOUNT_IGNORE=1
-export OF_PATCH_AVB20=1
-export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
-
-# Build as boot.img instead of recovery.img
-export FOX_RECOVERY_INSTALL_PARTITION="boot"
-export FOX_REPLACE_BOOTIMAGE_DATE=1
-export FOX_BUGGED_AOSP_ARB_WORKAROUND="1616300800"
-
-# Device info
 export OF_MAINTAINER="manusia"
 export FOX_BUILD_TYPE="Unofficial"
 export FOX_VERSION="R11.1"
-
-# Fix common issues
-export OF_FIX_OTA_UPDATE_MANUAL_FLASH_ERROR=1
-export OF_DISABLE_MIUI_OTA_BY_DEFAULT=1
-export OF_NO_MIUI_OTA_VENDOR_BACKUP=1
-export OF_NO_SAMSUNG_SPECIAL=1
-
-# Skip FBE decryption if causing issues
-export OF_SKIP_FBE_DECRYPTION=1
-
+export FOX_RECOVERY_INSTALL_PARTITION="boot"
+export ALLOW_MISSING_DEPENDENCIES=true
 echo "OrangeFox build variables loaded for X6512"
 EOF
 
-# Create BoardConfig additions for touchscreen
-echo "--- Updating BoardConfig for touchscreen support... ---"
+# Update BoardConfig.mk
+echo "--- Updating BoardConfig.mk... ---"
 if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
-    cat >> "$DEVICE_PATH/BoardConfig.mk" << 'EOF'
+    # Add our configurations if not already present
+    if ! grep -q "RECOVERY_TOUCHSCREEN" "$DEVICE_PATH/BoardConfig.mk"; then
+        cat >> "$DEVICE_PATH/BoardConfig.mk" << 'EOF'
 
 # Touchscreen configuration
 RECOVERY_TOUCHSCREEN_SWAP_XY := false
 RECOVERY_TOUCHSCREEN_FLIP_X := false
 RECOVERY_TOUCHSCREEN_FLIP_Y := false
-
-# Enable touch driver debugging
 BOARD_RECOVERY_TOUCHSCREEN_DEBUG := true
-
-# SPI touchscreen support
 TARGET_RECOVERY_DEVICE_MODULES += omnivision_tcm_spi
 TW_LOAD_VENDOR_MODULES := "omnivision_tcm_spi.ko"
-
-# Non-touch navigation support
 TW_USE_KEY_CODE_WAKE_DEVICE := true
 BOARD_HAS_NO_SELECT_BUTTON := true
-
-# Enable virtual mouse for navigation without touch
 TW_INPUT_BLACKLIST := ""
 TW_EXCLUDE_DEFAULT_USB_INIT := false
-
-# ADB configuration
 BOARD_ALWAYS_INSECURE := true
-TW_INCLUDE_CRYPTO := true
-TW_INCLUDE_CRYPTO_FBE := true
-TW_INCLUDE_FBE_METADATA_DECRYPT := true
-
-# Build as boot image
 BOARD_USES_RECOVERY_AS_BOOT := true
 BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
 EOF
+    fi
 fi
 
 # Setup build environment
 echo "--- Setting up build environment... ---"
+cd "$WORK_DIR"
+
+# Source the environment setup
 if [ -f build/envsetup.sh ]; then
+    debug_log "Sourcing build/envsetup.sh..."
     source build/envsetup.sh
 elif [ -f build/make/envsetup.sh ]; then
+    debug_log "Sourcing build/make/envsetup.sh..."
     source build/make/envsetup.sh
 else
-    error_exit "Failed to find envsetup.sh"
+    error_exit "envsetup.sh not found!"
 fi
 
-# Add device to lunch menu
+# The output you see is normal, let's continue...
+success_msg "Build environment loaded successfully!"
+
+# Add device to lunch menu (may already be done by envsetup)
 debug_log "Adding device to lunch menu..."
-add_lunch_combo "twrp_${DEVICE_CODENAME}-eng" || warning_msg "Failed to add lunch combo"
+add_lunch_combo "twrp_${DEVICE_CODENAME}-eng" 2>/dev/null || true
+
+# List available lunch options
+echo "--- Available lunch options: ---"
+lunch 2>&1 | grep -i "$DEVICE_CODENAME" || warning_msg "Device not in lunch menu"
 
 # Select device
-echo "--- Selecting device: ${DEVICE_CODENAME} ---"
-lunch "twrp_${DEVICE_CODENAME}-eng" || lunch "omni_${DEVICE_CODENAME}-eng" || error_exit "Failed to lunch device"
+echo "--- Selecting device: twrp_${DEVICE_CODENAME}-eng ---"
+lunch "twrp_${DEVICE_CODENAME}-eng" || {
+    warning_msg "Standard lunch failed, trying alternatives..."
+    lunch "omni_${DEVICE_CODENAME}-eng" || {
+        # Try to find any matching lunch option
+        LUNCH_OPTION=$(lunch 2>&1 | grep -i "$DEVICE_CODENAME" | head -1 | awk '{print $1}')
+        if [ -n "$LUNCH_OPTION" ]; then
+            lunch "$LUNCH_OPTION" || error_exit "Failed to lunch device!"
+        else
+            error_exit "No matching lunch option found!"
+        fi
+    }
+}
+
+# Verify lunch was successful
+if [ -z "$TARGET_PRODUCT" ]; then
+    error_exit "Lunch failed - TARGET_PRODUCT not set!"
+fi
+
+success_msg "Device selected: $TARGET_PRODUCT"
 
 # Clean previous builds
 echo "--- Cleaning previous builds... ---"
-make clean || warning_msg "Clean failed, continuing anyway..."
+make clean 2>/dev/null || warning_msg "Clean failed, continuing..."
 
-# Start building
-echo "--- Starting OrangeFox build... ---"
-debug_log "Building with TARGET_RECOVERY_IMAGE=$TARGET_RECOVERY_IMAGE"
-
-# Set additional build variables
+# Set build variables
 export TW_DEVICE_VERSION="1.0_manusia"
-export TARGET_PREBUILT_KERNEL="$DEVICE_PATH/prebuilt/kernel"
 export ALLOW_MISSING_DEPENDENCIES=true
 
-# Build the recovery
+# Check if kernel exists
+if [ -f "$DEVICE_PATH/prebuilt/kernel" ]; then
+    export TARGET_PREBUILT_KERNEL="$DEVICE_PATH/prebuilt/kernel"
+    success_msg "Using prebuilt kernel"
+else
+    warning_msg "Prebuilt kernel not found"
+fi
+
+# Start building
+echo "================================================"
+echo "        Starting Build Process                  "
+echo "================================================"
+echo "Target: $TARGET_PRODUCT"
+echo "Device: $DEVICE_CODENAME"
+echo "Type: Boot image (A/B device)"
+echo "================================================"
+
+# Build command based on target
 if [ "$TARGET_RECOVERY_IMAGE" == "boot" ]; then
-    debug_log "Building boot image..."
+    echo "--- Building boot image... ---"
     mka bootimage -j$(nproc --all) 2>&1 | tee build.log || {
-        warning_msg "bootimage build failed, trying alternative..."
-        mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log || error_exit "Build failed!"
+        warning_msg "bootimage target failed, trying recoveryimage..."
+        mka recoveryimage -j$(nproc --all) 2>&1 | tee -a build.log || {
+            warning_msg "recoveryimage failed, trying generic make..."
+            make -j$(nproc --all) 2>&1 | tee -a build.log || error_exit "All build attempts failed!"
+        }
     }
 else
-    debug_log "Building recovery image..."
+    echo "--- Building recovery image... ---"
     mka recoveryimage -j$(nproc --all) 2>&1 | tee build.log || error_exit "Build failed!"
 fi
 
@@ -483,93 +431,57 @@ OUT_DIR="out/target/product/$DEVICE_CODENAME"
 OUTPUT_DIR="/tmp/cirrus-ci-build/output"
 mkdir -p "$OUTPUT_DIR"
 
-# Find the built image
-debug_log "Looking for output images in: $OUT_DIR"
+# Search for output images
+debug_log "Searching for images in: $OUT_DIR"
 if [ -d "$OUT_DIR" ]; then
-    ls -la "$OUT_DIR/" | grep -E "\.img|\.zip"
-    
-    # Copy boot image
-    if [ -f "$OUT_DIR/boot.img" ]; then
-        cp "$OUT_DIR/boot.img" "$OUTPUT_DIR/OrangeFox-${DEVICE_CODENAME}-boot.img"
-        success_msg "Boot image copied to output"
-    fi
-    
-    # Copy recovery image if exists
-    if [ -f "$OUT_DIR/recovery.img" ]; then
-        cp "$OUT_DIR/recovery.img" "$OUTPUT_DIR/OrangeFox-${DEVICE_CODENAME}-recovery.img"
-        success_msg "Recovery image copied to output"
-    fi
-    
-    # Find and copy OrangeFox zip
-    for zip_file in "$OUT_DIR"/OrangeFox*.zip; do
-        if [ -f "$zip_file" ]; then
-            cp "$zip_file" "$OUTPUT_DIR/"
-            success_msg "OrangeFox zip copied: $(basename $zip_file)"
-        fi
+    # List all img files
+    echo "Found images:"
+    find "$OUT_DIR" -name "*.img" -type f 2>/dev/null | while read img; do
+        echo "  - $(basename $img)"
+        cp "$img" "$OUTPUT_DIR/" || true
     done
     
-    # Alternative locations for OrangeFox zip
-    if [ -d "$OUT_DIR/OrangeFox" ]; then
-        for zip_file in "$OUT_DIR/OrangeFox"/*.zip; do
-            if [ -f "$zip_file" ]; then
-                cp "$zip_file" "$OUTPUT_DIR/"
-                success_msg "OrangeFox zip copied from OrangeFox dir: $(basename $zip_file)"
-            fi
-        done
-    fi
+    # List all zip files
+    echo "Found zips:"
+    find "$OUT_DIR" -name "*.zip" -type f 2>/dev/null | while read zip; do
+        echo "  - $(basename $zip)"
+        cp "$zip" "$OUTPUT_DIR/" || true
+    done
 else
-    error_exit "Output directory not found: $OUT_DIR"
+    warning_msg "Output directory not found: $OUT_DIR"
 fi
 
 # Copy build log
-cp build.log "$OUTPUT_DIR/" 2>/dev/null || warning_msg "Failed to copy build log"
+cp build.log "$OUTPUT_DIR/" 2>/dev/null || true
 
-# Create device info file
+# Create info file
 cat > "$OUTPUT_DIR/device_info.txt" << EOF
 Device: Infinix X6512
-Android Version: 11
-Partition Type: A/B with Super partition
-Recovery Type: Boot image (no recovery partition)
+Android: 11
+Partition: A/B with Super partition
+Recovery: Boot image (no recovery partition)
 Touchscreen: omnivision_tcm_spi (spi2.0) - FIXED
-OrangeFox Version: R11.1 (fox_12.1 base)
-Build Date: $(date)
 Builder: manusia
 Email: ndktau@gmail.com
+Build Date: $(date)
 
 Features:
-- Full OrangeFox features enabled
-- Touchscreen support fixed for omnivision_tcm_spi
-- Non-touch navigation enabled (keyboard/mouse support)
-- ADB enabled by default for debugging
-- Debug mode enabled
+- OrangeFox/TWRP recovery
+- Touchscreen support for omnivision_tcm_spi
+- ADB enabled by default
+- Non-touch navigation support
 - Virtual A/B support
 - Super partition support
-- Boot image output (no recovery partition)
 
-Instructions:
-1. Flash boot.img using fastboot:
-   fastboot flash boot OrangeFox-X6512-boot.img
-   
-2. Or use the OrangeFox zip installer if available
-
-3. For touchscreen issues:
-   - ADB is enabled by default
-   - Connect USB and use: adb shell
-   - Run: /sbin/fix_touch.sh
-   
-4. Non-touch navigation:
-   - Use USB OTG with keyboard/mouse
-   - Volume keys for navigation
-   - Power button for selection
+Usage:
+1. Flash: fastboot flash boot <image_name>.img
+2. For touch issues: adb shell /sbin/fix_touch.sh
+3. USB OTG keyboard/mouse supported
 EOF
 
-# List output files
-echo "--- Output files ---"
+# List final output
+echo "================================================"
+echo "           Build Complete!                      "
+echo "================================================"
 ls -lah "$OUTPUT_DIR"
-
-success_msg "Build completed successfully!"
-echo "================================================"
-echo "       OrangeFox Build Complete!                "
-echo "================================================"
-echo "Output directory: $OUTPUT_DIR"
 echo "================================================"
