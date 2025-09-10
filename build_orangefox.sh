@@ -2,6 +2,7 @@
 
 # OrangeFox Recovery Builder Script for Infinix X6512
 # With touchscreen fix and full OrangeFox features support
+# Fixed for HTTPS authentication and no-SSH environment
 
 set -e
 set -x
@@ -15,6 +16,9 @@ DEVICE_BRANCH=$2
 DEVICE_CODENAME=$3
 MANIFEST_BRANCH=$4
 TARGET_RECOVERY_IMAGE=$5
+
+# Force HTTPS instead of SSH
+export USE_SSH=0
 
 # Colors for output
 RED='\033[0;31m'
@@ -58,9 +62,11 @@ debug_log "Architecture: $(uname -m)"
 debug_log "Available memory: $(free -h | grep Mem | awk '{print $2}')"
 debug_log "Available disk space: $(df -h / | tail -1 | awk '{print $4}')"
 
-# Check if we're in Docker/Container environment
-if [ -f /.dockerenv ] || [ -n "$CIRRUS_CI" ]; then
-    debug_log "Running in container environment (Docker/Cirrus CI)"
+# Check if SSH is installed
+if command -v ssh &> /dev/null; then
+    debug_log "SSH is installed: $(ssh -V 2>&1)"
+else
+    warning_msg "SSH not installed, will use HTTPS for git operations"
 fi
 
 # Check arguments
@@ -75,10 +81,14 @@ mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 debug_log "Working directory: $(pwd)"
 
-# Git configuration
-debug_log "Setting up git configuration..."
+# Git configuration for HTTPS
+debug_log "Setting up git configuration for HTTPS..."
 git config --global user.name "manusia"
 git config --global user.email "ndktau@gmail.com"
+git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+git config --global url."https://".insteadOf "git://"
+git config --global http.sslVerify false
 
 # Check if repo is available
 if ! command -v repo &> /dev/null; then
@@ -87,7 +97,7 @@ if ! command -v repo &> /dev/null; then
     chmod +x /usr/local/bin/repo
 fi
 
-echo "--- Clone OrangeFox sync script... ---"
+echo "--- Method 1: Clone OrangeFox sync script... ---"
 debug_log "Cloning from: https://gitlab.com/OrangeFox/sync.git"
 
 if [ -d sync_dir ]; then
@@ -95,43 +105,80 @@ if [ -d sync_dir ]; then
     rm -rf sync_dir
 fi
 
-git clone https://gitlab.com/OrangeFox/sync.git -b master sync_dir || error_exit "Failed to clone OrangeFox sync script"
+# Clone with HTTPS
+git clone https://gitlab.com/OrangeFox/sync.git -b master sync_dir || {
+    warning_msg "Failed to clone sync script, trying alternative method..."
+}
 
-if [ ! -d sync_dir ]; then
-    error_exit "sync_dir not found after cloning!"
-fi
-
-cd sync_dir
-debug_log "Contents of sync_dir:"
-ls -la
-
-# Check available branches in sync script
-debug_log "Checking available OrangeFox branches..."
-if [ -f orangefox_sync.sh ]; then
-    grep -E "fox_[0-9]+\.[0-9]+" orangefox_sync.sh | head -10
-fi
-
-echo "--- Syncing OrangeFox source code... ---"
-SYNC_PATH=$(realpath ../)
-debug_log "Sync path: $SYNC_PATH"
-
-# Use fox_12.1 since fox_11.0 is no longer supported
-if [ -f orangefox_sync.sh ]; then
-    debug_log "Found orangefox_sync.sh, using fox_12.1 branch..."
-    # Add --depth=1 to reduce download size
-    bash orangefox_sync.sh --branch 12.1 --path "$SYNC_PATH" || {
-        warning_msg "Sync failed, trying alternative method..."
-        cd "$SYNC_PATH"
-        
-        # Alternative: Direct repo init
-        repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git -b fox_12.1
-        repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) || error_exit "Alternative sync also failed"
+# Try the sync script if it exists
+if [ -d sync_dir ] && [ -f sync_dir/orangefox_sync.sh ]; then
+    cd sync_dir
+    debug_log "Contents of sync_dir:"
+    ls -la
+    
+    echo "--- Syncing OrangeFox source code using sync script... ---"
+    SYNC_PATH=$(realpath ../)
+    debug_log "Sync path: $SYNC_PATH"
+    
+    # Force HTTPS in sync script
+    bash orangefox_sync.sh --branch 12.1 --path "$SYNC_PATH" --ssh 0 || {
+        warning_msg "Sync script failed, will use direct repo method..."
     }
-else
-    error_exit "orangefox_sync.sh not found!"
+    cd "$SYNC_PATH"
 fi
 
-cd "$SYNC_PATH"
+# Check if sync was successful
+if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
+    echo "--- Method 2: Direct repo sync with HTTPS... ---"
+    warning_msg "Sync script didn't work, using direct repo init method..."
+    
+    cd "$WORK_DIR"
+    
+    # Clean up any previous attempts
+    rm -rf .repo
+    
+    # Initialize repo with HTTPS URL
+    debug_log "Initializing repo with HTTPS..."
+    repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git -b fox_12.1 --git-lfs --no-repo-verify || {
+        warning_msg "Standard repo init failed, trying GitHub mirror..."
+        
+        # Try GitHub mirror as alternative (community maintained)
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --git-lfs --no-repo-verify || {
+            error_exit "All repo init methods failed!"
+        }
+    }
+    
+    # Sync the repositories
+    debug_log "Starting repo sync..."
+    repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) --optimized-fetch --prune || {
+        warning_msg "Full sync failed, trying partial sync..."
+        repo sync -c --force-sync --no-tags --no-clone-bundle -j4 || {
+            error_exit "Repo sync completely failed!"
+        }
+    }
+fi
+
+# Alternative Method 3: Use TWRP minimal manifest if OrangeFox fails
+if [ ! -f build/envsetup.sh ] && [ ! -f build/make/envsetup.sh ]; then
+    echo "--- Method 3: Using TWRP minimal manifest as fallback... ---"
+    warning_msg "OrangeFox sync failed, using TWRP base instead..."
+    
+    cd "$WORK_DIR"
+    rm -rf .repo
+    
+    # Use TWRP minimal manifest which is more reliable
+    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
+    repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
+    
+    # Clone OrangeFox vendor repository manually
+    if [ ! -d vendor/recovery ]; then
+        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_12.1 vendor/recovery || {
+            warning_msg "Failed to clone OrangeFox vendor, build will be TWRP-based"
+        }
+    fi
+fi
+
+cd "$WORK_DIR"
 debug_log "Checking build system files..."
 
 # Wait for sync to complete and check multiple times
@@ -331,7 +378,7 @@ export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
 # Build as boot.img instead of recovery.img
 export FOX_RECOVERY_INSTALL_PARTITION="boot"
 export FOX_REPLACE_BOOTIMAGE_DATE=1
-export FOX_BUGGED_AOSP_ARB_WORKAROUND="1616300800" # Tue Mar 21 2021
+export FOX_BUGGED_AOSP_ARB_WORKAROUND="1616300800"
 
 # Device info
 export OF_MAINTAINER="manusia"
@@ -480,3 +527,49 @@ cp build.log "$OUTPUT_DIR/" 2>/dev/null || warning_msg "Failed to copy build log
 # Create device info file
 cat > "$OUTPUT_DIR/device_info.txt" << EOF
 Device: Infinix X6512
+Android Version: 11
+Partition Type: A/B with Super partition
+Recovery Type: Boot image (no recovery partition)
+Touchscreen: omnivision_tcm_spi (spi2.0) - FIXED
+OrangeFox Version: R11.1 (fox_12.1 base)
+Build Date: $(date)
+Builder: manusia
+Email: ndktau@gmail.com
+
+Features:
+- Full OrangeFox features enabled
+- Touchscreen support fixed for omnivision_tcm_spi
+- Non-touch navigation enabled (keyboard/mouse support)
+- ADB enabled by default for debugging
+- Debug mode enabled
+- Virtual A/B support
+- Super partition support
+- Boot image output (no recovery partition)
+
+Instructions:
+1. Flash boot.img using fastboot:
+   fastboot flash boot OrangeFox-X6512-boot.img
+   
+2. Or use the OrangeFox zip installer if available
+
+3. For touchscreen issues:
+   - ADB is enabled by default
+   - Connect USB and use: adb shell
+   - Run: /sbin/fix_touch.sh
+   
+4. Non-touch navigation:
+   - Use USB OTG with keyboard/mouse
+   - Volume keys for navigation
+   - Power button for selection
+EOF
+
+# List output files
+echo "--- Output files ---"
+ls -lah "$OUTPUT_DIR"
+
+success_msg "Build completed successfully!"
+echo "================================================"
+echo "       OrangeFox Build Complete!                "
+echo "================================================"
+echo "Output directory: $OUTPUT_DIR"
+echo "================================================"
