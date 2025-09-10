@@ -19,23 +19,82 @@ task:
     FOX_ENABLE_ADB: 1
     FOX_DEBUG_MODE: 1
   install_script:
-    - sed -i 's|archive.ubuntu.com|azure.archive.ubuntu.com|g' /etc/apt/sources.list
-    - apt-get update
-    - apt-get install -y --no-install-recommends \
-        ca-certificates git curl wget unzip zip rsync bc build-essential \
-        gcc g++ make pkg-config flex bison gperf \
-        libssl-dev libxml2-utils xsltproc zlib1g-dev libncurses5 libncurses5-dev libtinfo5 \
-        libx11-dev libgl1-mesa-dev fontconfig \
-        python3 python-is-python3 python3-protobuf \
-        openjdk-11-jdk \
-        ccache lz4 zstd \
-        liblz4-tool libncursesw5 \
-        android-sdk-libsparse-utils
+    # Fix repository sources for Docker container
+    - |
+      echo "Fixing repository sources..."
+      cat > /etc/apt/sources.list << 'EOL'
+      deb http://archive.ubuntu.com/ubuntu/ focal main restricted universe multiverse
+      deb http://archive.ubuntu.com/ubuntu/ focal-updates main restricted universe multiverse
+      deb http://archive.ubuntu.com/ubuntu/ focal-backports main restricted universe multiverse
+      deb http://security.ubuntu.com/ubuntu focal-security main restricted universe multiverse
+      EOL
+    # Update package lists
+    - apt-get update -y
+    # Install required packages (fixed formatting)
+    - |
+      apt-get install -y --no-install-recommends \
+      ca-certificates \
+      git \
+      curl \
+      wget \
+      unzip \
+      zip \
+      rsync \
+      bc \
+      build-essential \
+      gcc \
+      g++ \
+      make \
+      pkg-config \
+      flex \
+      bison \
+      gperf \
+      libssl-dev \
+      libxml2-utils \
+      xsltproc \
+      zlib1g-dev \
+      libncurses5 \
+      libncurses5-dev \
+      libtinfo5 \
+      libx11-dev \
+      libgl1-mesa-dev \
+      fontconfig \
+      python3 \
+      python3-pip \
+      python3-protobuf \
+      openjdk-11-jdk \
+      ccache \
+      lz4 \
+      zstd \
+      liblz4-tool \
+      libncursesw5 \
+      imagemagick \
+      lib32z1 \
+      lib32ncurses-dev \
+      libbz2-dev \
+      libffi-dev \
+      liblzma-dev \
+      libsqlite3-dev \
+      libreadline-dev \
+      xz-utils \
+      tk-dev
+    # Install python-is-python3 if available
+    - apt-get install -y python-is-python3 || ln -sf /usr/bin/python3 /usr/bin/python
+    # Install android tools (alternative method since android-sdk-libsparse-utils might not be available)
+    - |
+      apt-get install -y android-tools-fsutils || true
+      apt-get install -y android-sdk-libsparse-utils || true
+      apt-get install -y simg2img img2simg || true
+    # Install repo tool
     - curl -s https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
     - chmod +x /usr/local/bin/repo
+    # Configure git
     - git config --global user.name "manusia"
     - git config --global user.email "ndktau@gmail.com"
     - git config --global color.ui false
+    # Create necessary directories
+    - mkdir -p /tmp/ccache
+    - mkdir -p /tmp/cirrus-ci-build
   script:
     - set -x
     - export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
@@ -44,8 +103,18 @@ task:
     - export CCACHE_DIR="/tmp/ccache"
     - export ALLOW_MISSING_DEPENDENCIES=true
     - ccache -M 20G || true
+    - echo "[DEBUG] Current directory: $(pwd)"
     - echo "[DEBUG] Current directory files:" && ls -la
-    - if [ -f build_orangefox.sh ]; then chmod +x build_orangefox.sh; else echo "build_orangefox.sh not found!"; ls -la; exit 1; fi
+    - |
+      if [ -f build_orangefox.sh ]; then 
+        chmod +x build_orangefox.sh
+        echo "[DEBUG] build_orangefox.sh found and made executable"
+      else 
+        echo "[ERROR] build_orangefox.sh not found!"
+        echo "[DEBUG] Available files:"
+        ls -la
+        exit 1
+      fi
     - echo "[DEBUG] Environment variables:"
     - echo "DEVICE_TREE: $DEVICE_TREE"
     - echo "DEVICE_BRANCH: $DEVICE_BRANCH"
