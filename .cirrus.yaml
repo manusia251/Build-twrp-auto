@@ -54,8 +54,8 @@ task:
     - export PATH=$JAVA_HOME/bin:$PATH
     
     # Configure git
-    - git config --global user.name "manusia251"
-    - git config --global user.email "darkside@gmail.com"
+    - git config --global user.name "man251"
+    - git config --global user.email "darde@gmail.com"
     
     # Set up build environment
     - export USE_CCACHE=1
