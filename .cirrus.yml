@@ -109,3 +109,8 @@ task:
       
       echo "[DEBUG] Starting OrangeFox build..."
       bash -x ./build_orangefox.sh "$DEVICE_TREE" "$DEVICE_BRANCH" "$DEVICE_CODENAME" "$MANIFEST_BRANCH" "$TARGET_RECOVERY_IMAGE"
+
+  always:  # Wrap artifacts dengan always agar di-upload meski build gagal
+    artifacts:
+      path: /tmp/cirrus-ci-build/output/*
+      name: OrangeFox_Build
