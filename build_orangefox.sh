@@ -84,10 +84,10 @@ echo "--- Starting sync process... ---"
 if [ -f "build/envsetup.sh" ] || [ -f "build/make/envsetup.sh" ]; then
     echo "--- Source already synced, skipping... ---"
 else
-    echo "--- Initializing TWRP 12.1 minimal manifest... ---"
+    echo "--- Initializing TWRP 11 minimal manifest... ---"  # Changed for Android 11 target
     rm -rf .repo
     
-    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --git-lfs --no-repo-verify || {
+    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --git-lfs --no-repo-verify || {  # Changed branch to twrp-11 for Android 11
         echo "[ERROR] Failed to initialize repo"
         exit 1
     }
@@ -101,7 +101,7 @@ else
     # Clone OrangeFox vendor
     if [ ! -d "vendor/recovery" ]; then
         echo "--- Cloning OrangeFox vendor... ---"
-        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_12.1 vendor/recovery --depth=1 || {
+        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_10.0 vendor/recovery --depth=1 || {  # Changed branch to fox_10.0 for Android 11 compatibility
             echo "[WARNING] Failed to clone OrangeFox vendor, continuing anyway..."
         }
     fi
@@ -148,29 +148,38 @@ if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
     cat >> "$DEVICE_PATH/BoardConfig.mk" << 'BOARD_EOF'
 
 # Platform
-TARGET_BOARD_PLATFORM := mt6765
-TARGET_BOOTLOADER_BOARD_NAME := mt6765
+TARGET_BOARD_PLATFORM := sc9863a  # Changed to correct platform for Unisoc SC9863A
 
 # Architecture
-TARGET_ARCH := arm
-TARGET_ARCH_VARIANT := armv7-a-neon
-TARGET_CPU_ABI := armeabi-v7a
-TARGET_CPU_ABI2 := armeabi
+TARGET_ARCH := arm64  # Changed to arm64 for 64-bit architecture
+TARGET_ARCH_VARIANT := armv8-a
+TARGET_CPU_ABI := arm64-v8a
+TARGET_CPU_ABI2 :=
 TARGET_CPU_VARIANT := generic
+TARGET_CPU_VARIANT_RUNTIME := cortex-a55
+
+TARGET_2ND_ARCH := arm
+TARGET_2ND_ARCH_VARIANT := armv8-a
+TARGET_2ND_CPU_ABI := armeabi-v7a
+TARGET_2ND_CPU_ABI2 := armeabi
+TARGET_2ND_CPU_VARIANT := generic
+TARGET_2ND_CPU_VARIANT_RUNTIME := cortex-a55
 
 # Kernel
-BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,32N2
-BOARD_KERNEL_BASE := 0x40078000
+BOARD_KERNEL_CMDLINE := console=ttyS1,115200n8  # Changed for Unisoc typical cmdline
+BOARD_KERNEL_BASE := 0x00000000  # Changed for Unisoc
 BOARD_KERNEL_PAGESIZE := 2048
 BOARD_KERNEL_OFFSET := 0x00008000
-BOARD_RAMDISK_OFFSET := 0x07c08000
-BOARD_KERNEL_TAGS_OFFSET := 0x0bc08000
-BOARD_FLASH_BLOCK_SIZE := 131072
+BOARD_RAMDISK_OFFSET := 0x05400000  # Adjusted for typical Unisoc
+BOARD_KERNEL_TAGS_OFFSET := 0x00000100
+BOARD_KERNEL_SECOND_OFFSET := 0x00f00000
+BOARD_DTB_OFFSET := 0x01f00000
+BOARD_FLASH_BLOCK_SIZE := 512
 BOARD_BOOTIMG_HEADER_VERSION := 2
-BOARD_KERNEL_IMAGE_NAME := Image.gz
+BOARD_KERNEL_IMAGE_NAME := kernel
 
 # Partitions
-BOARD_FLASH_BLOCK_SIZE := 131072
+BOARD_FLASH_BLOCK_SIZE := 512
 BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 33554432
 
@@ -198,20 +207,20 @@ BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
 TW_THEME := portrait_hdpi
 RECOVERY_SDCARD_ON_DATA := true
 TW_EXCLUDE_DEFAULT_USB_INIT := true
-TW_EXTRA_LANGUAGES := true
+TW_EXTRA_LANGUAGES := false  # Changed to false to reduce size
 TW_SCREEN_BLANK_ON_BOOT := true
 TW_INPUT_BLACKLIST := "hbtp_vm"
 TW_USE_TOOLBOX := true
-TW_INCLUDE_REPACKTOOLS := true
-TW_INCLUDE_RESETPROP := true
-TW_INCLUDE_LIBRESETPROP := true
+TW_INCLUDE_REPACKTOOLS := false  # Changed to false to reduce size
+TW_INCLUDE_RESETPROP := false  # Changed to false to reduce size
+TW_INCLUDE_LIBRESETPROP := false  # Changed to false to reduce size
 TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
 
 # Debug flags
-TWRP_INCLUDE_LOGCAT := true
-TARGET_USES_LOGD := true
+TWRP_INCLUDE_LOGCAT := false  # Changed to false to reduce size
+TARGET_USES_LOGD := false  # Changed to false to reduce size
 
 # Crypto
 TW_INCLUDE_CRYPTO := true
@@ -219,7 +228,7 @@ TW_INCLUDE_CRYPTO_FBE := true
 TW_INCLUDE_FBE_METADATA_DECRYPT := true
 PLATFORM_SECURITY_PATCH := 2099-12-31
 VENDOR_SECURITY_PATCH := 2099-12-31
-PLATFORM_VERSION := 16.1.0
+PLATFORM_VERSION := 11.0.0  # Changed to 11.0.0 for Android 11
 TW_USE_FSCRYPT_POLICY := 1
 
 # Additional flags
@@ -360,7 +369,6 @@ export OF_STATUS_INDENT_LEFT=48
 export OF_STATUS_INDENT_RIGHT=48
 export OF_HIDE_NOTCH=1
 export OF_CLOCK_POS=1
-export OF_SCREEN_H=2400
 export OF_FORCE_ENABLE_ADB=1
 export OF_SKIP_ADB_SECURE=1
 export FOX_RECOVERY_INSTALL_PARTITION="boot"
@@ -369,7 +377,7 @@ export FOX_BUILD_TYPE="Unofficial"
 export FOX_VERSION="R11.1"
 export OF_USE_GREEN_LED=0
 export FOX_DELETE_AROMAFM=1
-export FOX_ENABLE_APP_MANAGER=1
+export FOX_ENABLE_APP_MANAGER=0  # Changed to 0 to reduce size
 export OF_FBE_METADATA_MOUNT_IGNORE=1
 export OF_PATCH_AVB20=1
 export OF_DEBUG_MODE=1
