@@ -1,87 +1,46 @@
 task:
-  name: Build TWRP X6512 (boot.img)
+  name: Build OrangeFox X6512 (boot.img)
   container:
-    image: ubuntu:18.04
+    image: ubuntu:20.04
     cpu: 8
     memory: 32G
   environment:
-    MANIFEST_BRANCH: fox_11.0
     DEVICE_TREE: https://github.com/manusia251/twrp-test.git
     DEVICE_BRANCH: main
     DEVICE_CODENAME: X6512
+    MANIFEST_BRANCH: fox_11.0   # diabaikan oleh script (legacy)
     TARGET_RECOVERY_IMAGE: boot
     DEBIAN_FRONTEND: noninteractive
   install_script:
-    # Fix sources.list for Docker minimal image
-    - echo "deb http://archive.ubuntu.com/ubuntu bionic main restricted" > /etc/apt/sources.list
-    - echo "deb http://archive.ubuntu.com/ubuntu bionic-updates main restricted" >> /etc/apt/sources.list
-    - echo "deb http://archive.ubuntu.com/ubuntu bionic universe" >> /etc/apt/sources.list
-    - echo "deb http://archive.ubuntu.com/ubuntu bionic-updates universe" >> /etc/apt/sources.list
-    - echo "deb http://archive.ubuntu.com/ubuntu bionic multiverse" >> /etc/apt/sources.list
-    - echo "deb http://archive.ubuntu.com/ubuntu bionic-updates multiverse" >> /etc/apt/sources.list
-    - echo "deb http://security.ubuntu.com/ubuntu bionic-security main restricted" >> /etc/apt/sources.list
-    - echo "deb http://security.ubuntu.com/ubuntu bionic-security universe" >> /etc/apt/sources.list
-    - echo "deb http://security.ubuntu.com/ubuntu bionic-security multiverse" >> /etc/apt/sources.list
-    
-    # Update package lists with fixed repositories
     - apt-get update
-    
-    # Install basic tools first
-    - apt-get install -y software-properties-common apt-utils wget ca-certificates
-    
-    # Enable i386 architecture for 32-bit packages
-    - dpkg --add-architecture i386
-    - apt-get update
-    
-    # Install AOSP dependencies
-    - apt-get install -y git gnupg flex bison gperf build-essential zip curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig
-    
-    # Install additional development tools
-    - apt-get install -y libx11-dev libxml2-utils xsltproc unzip fontconfig libssl-dev bc python python3 rsync ccache
-    
-    # Install Java 8
-    - apt-get install -y openjdk-8-jdk
-    
-    # Install additional tools for recovery building
-    - apt-get install -y lzop pngcrush schedtool libncurses5-dev nano vim
-    # Install repo tool
-    - curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+    - apt-get install -y --no-install-recommends \
+        ca-certificates git curl wget unzip zip rsync bc build-essential \
+        gcc g++ make pkg-config flex bison gperf \
+        libssl-dev libxml2-utils xsltproc zlib1g-dev libncurses5 libncurses5-dev libtinfo5 \
+        libx11-dev libgl1-mesa-dev fontconfig \
+        python3 python-is-python3 \
+        openjdk-11-jdk \
+        ccache lz4 zstd
+    - curl -s https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
     - chmod +x /usr/local/bin/repo
-        
+    - git config --global user.name "mana251"
+    - git config --global user.email "darke@gmail.com"
+    - git config --global color.ui false
   script:
-    # Set Java 8 as default
-    - export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+    - set -x
+    - export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
     - export PATH=$JAVA_HOME/bin:$PATH
-    
-    # Configure git
-    - git config --global user.name "man251"
-    - git config --global user.email "darde@gmail.com"
-    
-    # Set up build environment
     - export USE_CCACHE=1
-    - export CCACHE_COMPRESS=1
     - export CCACHE_DIR="/tmp/ccache"
-    - export CCACHE_MAX_SIZE=50G
-    
-    # No need to clone external repo; assume we're in Build-twrp-auto
-    - echo "Current directory files:"
-    - ls -la
-    
-    # Check if build script exists and make it executable
+    - ccache -M 20G || true
+    - echo "Current directory files:" && ls -la
     - if [ -f build_twrp.sh ]; then chmod +x build_twrp.sh; else echo "build_twrp.sh not found!"; ls -la; exit 1; fi
-    
-    # Show environment variables
-    - echo "Environment variables:"
     - echo "DEVICE_TREE: $DEVICE_TREE"
-    - echo "DEVICE_BRANCH: $DEVICE_BRANCH" 
+    - echo "DEVICE_BRANCH: $DEVICE_BRANCH"
     - echo "DEVICE_CODENAME: $DEVICE_CODENAME"
     - echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
     - echo "TARGET_RECOVERY_IMAGE: $TARGET_RECOVERY_IMAGE"
-    
-    # Build TWRP (pass env vars as args for compatibility)
-    - echo "Starting TWRP build..."
-    - bash build_twrp.sh "$DEVICE_TREE" "$DEVICE_BRANCH" "$DEVICE_CODENAME" "$MANIFEST_BRANCH" "$TARGET_RECOVERY_IMAGE"
-    
+    - bash -x ./build_twrp.sh "$DEVICE_TREE" "$DEVICE_BRANCH" "$DEVICE_CODENAME" "$MANIFEST_BRANCH" "$TARGET_RECOVERY_IMAGE"
   artifacts:
-    path: output/**/*  # Adjust path: Asumsi output di root, bukan builder/output
+    path: output/**/*
   timeout_in: 120m
