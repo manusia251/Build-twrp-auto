@@ -228,7 +228,7 @@ TW_INCLUDE_CRYPTO_FBE := true
 TW_INCLUDE_FBE_METADATA_DECRYPT := true
 PLATFORM_SECURITY_PATCH := 2099-12-31
 VENDOR_SECURITY_PATCH := 2099-12-31
-PLATFORM_VERSION := 11.0.0  # Changed to 11.0.0 for Android 11
+PLATFORM_VERSION := 11
 TW_USE_FSCRYPT_POLICY := 1
 
 # Additional flags
@@ -257,7 +257,7 @@ PRODUCT_BRAND := Infinix
 PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
 PRODUCT_MANUFACTURER := Infinix
 
-# Remove duplicate date properties - let the build system handle it
+# Remove duplicate date properties
 PRODUCT_PROPERTY_OVERRIDES += \\
     ro.vendor.build.security_patch=2099-12-31
 EOF
