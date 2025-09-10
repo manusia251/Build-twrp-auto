@@ -5,7 +5,7 @@ task:
     cpu: 8
     memory: 32G
   environment:
-    MANIFEST_BRANCH: twrp-11
+    MANIFEST_BRANCH: fox_11.0
     DEVICE_TREE: https://github.com/manusia251/twrp-test.git
     DEVICE_BRANCH: main
     DEVICE_CODENAME: X6512
