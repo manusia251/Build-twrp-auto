@@ -84,10 +84,10 @@ echo "--- Starting sync process... ---"
 if [ -f "build/envsetup.sh" ] || [ -f "build/make/envsetup.sh" ]; then
     echo "--- Source already synced, skipping... ---"
 else
-    echo "--- Initializing TWRP 11 minimal manifest... ---"  # Changed for Android 11 target
+    echo "--- Initializing TWRP 11 minimal manifest... ---"
     rm -rf .repo
     
-    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --git-lfs --no-repo-verify || {  # Changed branch to twrp-11 for Android 11
+    repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --git-lfs --no-repo-verify || {
         echo "[ERROR] Failed to initialize repo"
         exit 1
     }
@@ -101,7 +101,7 @@ else
     # Clone OrangeFox vendor
     if [ ! -d "vendor/recovery" ]; then
         echo "--- Cloning OrangeFox vendor... ---"
-        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_10.0 vendor/recovery --depth=1 || {  # Changed branch to fox_10.0 for Android 11 compatibility
+        git clone https://gitlab.com/OrangeFox/vendor/recovery.git -b fox_10.0 vendor/recovery --depth=1 || {
             echo "[WARNING] Failed to clone OrangeFox vendor, continuing anyway..."
         }
     fi
@@ -143,15 +143,17 @@ if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
     # Remove all problematic lines
     sed -i '/^export /d' "$DEVICE_PATH/BoardConfig.mk"
     sed -i '/TW_THEME/d' "$DEVICE_PATH/BoardConfig.mk"
+    sed -i '/TW_INCLUDE_RESETPROP/d' "$DEVICE_PATH/BoardConfig.mk"
+    sed -i '/TW_INCLUDE_LIBRESETPROP/d' "$DEVICE_PATH/BoardConfig.mk"
     
     # Append clean configuration
     cat >> "$DEVICE_PATH/BoardConfig.mk" << 'BOARD_EOF'
 
 # Platform
-TARGET_BOARD_PLATFORM := sc9863a  # Changed to correct platform for Unisoc SC9863A
+TARGET_BOARD_PLATFORM := sc9863a
 
 # Architecture
-TARGET_ARCH := arm64  # Changed to arm64 for 64-bit architecture
+TARGET_ARCH := arm64
 TARGET_ARCH_VARIANT := armv8-a
 TARGET_CPU_ABI := arm64-v8a
 TARGET_CPU_ABI2 :=
@@ -166,11 +168,11 @@ TARGET_2ND_CPU_VARIANT := generic
 TARGET_2ND_CPU_VARIANT_RUNTIME := cortex-a55
 
 # Kernel
-BOARD_KERNEL_CMDLINE := console=ttyS1,115200n8  # Changed for Unisoc typical cmdline
-BOARD_KERNEL_BASE := 0x00000000  # Changed for Unisoc
+BOARD_KERNEL_CMDLINE := console=ttyS1,115200n8
+BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_PAGESIZE := 2048
 BOARD_KERNEL_OFFSET := 0x00008000
-BOARD_RAMDISK_OFFSET := 0x05400000  # Adjusted for typical Unisoc
+BOARD_RAMDISK_OFFSET := 0x05400000
 BOARD_KERNEL_TAGS_OFFSET := 0x00000100
 BOARD_KERNEL_SECOND_OFFSET := 0x00f00000
 BOARD_DTB_OFFSET := 0x01f00000
@@ -207,20 +209,21 @@ BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
 TW_THEME := portrait_hdpi
 RECOVERY_SDCARD_ON_DATA := true
 TW_EXCLUDE_DEFAULT_USB_INIT := true
-TW_EXTRA_LANGUAGES := false  # Changed to false to reduce size
+TW_EXTRA_LANGUAGES := false
 TW_SCREEN_BLANK_ON_BOOT := true
 TW_INPUT_BLACKLIST := "hbtp_vm"
 TW_USE_TOOLBOX := true
-TW_INCLUDE_REPACKTOOLS := false  # Changed to false to reduce size
-TW_INCLUDE_RESETPROP := false  # Changed to false to reduce size
-TW_INCLUDE_LIBRESETPROP := false  # Changed to false to reduce size
+TW_INCLUDE_REPACKTOOLS := true
 TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
 
+# Resetprop - MUST be enabled for OrangeFox
+TW_INCLUDE_RESETPROP := true
+
 # Debug flags
-TWRP_INCLUDE_LOGCAT := false  # Changed to false to reduce size
-TARGET_USES_LOGD := false  # Changed to false to reduce size
+TWRP_INCLUDE_LOGCAT := false
+TARGET_USES_LOGD := false
 
 # Crypto
 TW_INCLUDE_CRYPTO := true
@@ -234,6 +237,9 @@ TW_USE_FSCRYPT_POLICY := 1
 # Additional flags
 TW_NO_SCREEN_BLANK := true
 TW_EXCLUDE_APEX := true
+
+# OrangeFox specific - allow missing dependencies
+ALLOW_MISSING_DEPENDENCIES := true
 BOARD_EOF
 fi
 
@@ -241,7 +247,7 @@ fi
 echo "--- Creating makefiles... ---"
 cd $DEVICE_PATH
 
-# Create twrp makefile - REMOVING the duplicate ro.build.date.utc
+# Create twrp makefile
 cat > "twrp_${DEVICE_CODENAME}.mk" << EOF
 # Inherit from those products. Most specific first.
 \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
@@ -257,12 +263,12 @@ PRODUCT_BRAND := Infinix
 PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
 PRODUCT_MANUFACTURER := Infinix
 
-# Remove duplicate date properties
+# Properties
 PRODUCT_PROPERTY_OVERRIDES += \\
     ro.vendor.build.security_patch=2099-12-31
 EOF
 
-# Create omni makefile - REMOVING the duplicate ro.build.date.utc
+# Create omni makefile
 cat > "omni_${DEVICE_CODENAME}.mk" << EOF
 # Inherit from those products. Most specific first.
 \$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
@@ -278,7 +284,7 @@ PRODUCT_BRAND := Infinix
 PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
 PRODUCT_MANUFACTURER := Infinix
 
-# Remove duplicate date properties
+# Properties
 PRODUCT_PROPERTY_OVERRIDES += \\
     ro.vendor.build.security_patch=2099-12-31
 EOF
@@ -354,7 +360,7 @@ on boot
     start adbd
 INIT_EOF
 
-# Create vendorsetup.sh - WITHOUT setting ro.build.date.utc
+# Create vendorsetup.sh with proper flags
 cat > vendorsetup.sh << VENDOR_EOF
 export FOX_USE_BASH_SHELL=1
 export FOX_ASH_IS_BASH=1
@@ -377,14 +383,20 @@ export FOX_BUILD_TYPE="Unofficial"
 export FOX_VERSION="R11.1"
 export OF_USE_GREEN_LED=0
 export FOX_DELETE_AROMAFM=1
-export FOX_ENABLE_APP_MANAGER=0  # Changed to 0 to reduce size
+export FOX_ENABLE_APP_MANAGER=0
 export OF_FBE_METADATA_MOUNT_IGNORE=1
 export OF_PATCH_AVB20=1
 export OF_DEBUG_MODE=1
 
-# Don't override build date - let the system handle it
+# Don't override build date
 export FOX_REPLACE_BOOTIMAGE_DATE=0
 export FOX_BUGGED_AOSP_ARB_WORKAROUND=""
+
+# Force include resetprop
+export TW_INCLUDE_RESETPROP=true
+
+# Allow missing dependencies
+export ALLOW_MISSING_DEPENDENCIES=true
 
 echo "OrangeFox build variables loaded for ${DEVICE_CODENAME}"
 VENDOR_EOF
@@ -406,13 +418,14 @@ else
     exit 1
 fi
 
-# Export additional variables - REMOVE duplicate date settings
+# Export additional variables
 export DISABLE_ROOMSERVICE=1
 export ALLOW_MISSING_DEPENDENCIES=true
 export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
 export LC_ALL=C
+export TW_INCLUDE_RESETPROP=true
 
-# Unset any date override variables that might cause duplicates
+# Unset any date override variables
 unset PRODUCT_BUILD_PROP_OVERRIDES
 unset ADDITIONAL_BUILD_PROPERTIES
 
@@ -433,7 +446,6 @@ make clean || true
 echo "--- Building $TARGET_RECOVERY_IMAGE image... ---"
 if [ "$TARGET_RECOVERY_IMAGE" = "boot" ]; then
     echo "Building boot image..."
-    # Use make instead of mka to avoid property conflicts
     make bootimage -j$(nproc --all) 2>&1 | tee build.log || {
         echo "Build failed, checking for partial outputs..."
     }
