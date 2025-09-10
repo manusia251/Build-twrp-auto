@@ -1,8 +1,3 @@
-Baik, saya akan buat ulang perbaikan yang komplit untuk build OrangeFox Recovery Android 11 dengan target boot.img untuk MT6761. Semua file tambahan akan dibuat melalui script.
-
-## 1. **build_twrp.sh** (Script Lengkap dengan Pembuatan File Otomatis)
-
-```bash
 #!/bin/bash
 #
 # Skrip Build OrangeFox Recovery untuk Android 11 - MT6761
@@ -10,6 +5,9 @@ Baik, saya akan buat ulang perbaikan yang komplit untuk build OrangeFox Recovery
 # =======================================================================
 
 set -e
+
+# Enable debugging
+set -x
 
 # Parse arguments
 DEVICE_TREE_URL="${1:-https://github.com/manusia251/twrp-test.git}"
@@ -39,50 +37,112 @@ echo "========================================"
 WORKDIR=$(pwd)
 export GITHUB_WORKSPACE=$WORKDIR
 
-echo "--- Membuat dan masuk ke direktori build... ---"
+echo "[DEBUG] Current working directory: $WORKDIR"
+echo "[DEBUG] Creating build directory..."
+
 mkdir -p "$WORKDIR/orangefox"
 cd "$WORKDIR/orangefox"
 
+echo "[DEBUG] Now in directory: $(pwd)"
+
 # Configure git
-git config --global user.name "manusia251"
-git config --global user.email "darkside@gmail.com"
+git config --global user.name "maia251"
+git config --global user.email "darde@gmail.com"
 
 # Clone OrangeFox sync script
 echo "--- Clone OrangeFox sync script... ---"
+echo "[DEBUG] Cloning from: https://gitlab.com/OrangeFox/sync.git"
+
+if [ -d "sync_dir" ]; then
+    echo "[DEBUG] sync_dir already exists, removing..."
+    rm -rf sync_dir
+fi
+
 git clone https://gitlab.com/OrangeFox/sync.git -b master sync_dir || {
-    echo "--- Trying alternative sync method... ---"
+    echo "[DEBUG] Failed to clone with master branch, trying without branch..."
     git clone https://gitlab.com/OrangeFox/sync.git sync_dir
 }
 
+if [ ! -d "sync_dir" ]; then
+    echo "[ERROR] Failed to clone sync repository!"
+    exit 1
+fi
+
 cd sync_dir
+echo "[DEBUG] Contents of sync_dir:"
+ls -la
 
 # Sync OrangeFox source
 echo "--- Sinkronisasi source code OrangeFox... ---"
 if [ -f "orangefox_sync.sh" ]; then
+    echo "[DEBUG] Found orangefox_sync.sh, using it..."
     bash orangefox_sync.sh --branch ${MANIFEST_BRANCH} --path ../
+elif [ -f "sync.sh" ]; then
+    echo "[DEBUG] Found sync.sh, using it..."
+    bash sync.sh --branch ${MANIFEST_BRANCH} --path ../
 else
-    # Fallback to manual sync
+    echo "[DEBUG] No sync script found, using manual repo sync..."
     cd ..
-    repo init -u https://gitlab.com/OrangeFox/Manifest.git -b ${MANIFEST_BRANCH}
-    repo sync -j8 --force-sync
+    
+    # Install repo if not available
+    if ! command -v repo &> /dev/null; then
+        echo "[DEBUG] Installing repo tool..."
+        curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+        chmod +x /usr/local/bin/repo
+    fi
+    
+    echo "[DEBUG] Initializing repo with OrangeFox manifest..."
+    repo init -u https://gitlab.com/OrangeFox/Manifest.git -b ${MANIFEST_BRANCH} --depth=1
+    
+    echo "[DEBUG] Starting repo sync..."
+    repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) || {
+        echo "[WARNING] Full sync failed, trying minimal sync..."
+        repo sync -c --force-sync --no-tags --no-clone-bundle -j4
+    }
 fi
 
 cd "$WORKDIR/orangefox"
 
+echo "[DEBUG] Checking if build/envsetup.sh exists..."
+if [ ! -f "build/envsetup.sh" ]; then
+    echo "[ERROR] build/envsetup.sh not found! Sync might have failed."
+    echo "[DEBUG] Current directory contents:"
+    ls -la
+    echo "[DEBUG] Trying to find envsetup.sh..."
+    find . -name "envsetup.sh" -type f 2>/dev/null | head -5
+    exit 1
+fi
+
 # Clone device tree
 echo "--- Clone device tree... ---"
-git clone ${DEVICE_TREE_URL} -b ${DEVICE_TREE_BRANCH} device/${VENDOR_NAME}/${DEVICE_CODENAME}
+DEVICE_TREE_PATH="device/${VENDOR_NAME}/${DEVICE_CODENAME}"
+
+if [ -d "$DEVICE_TREE_PATH" ]; then
+    echo "[DEBUG] Device tree already exists, removing..."
+    rm -rf "$DEVICE_TREE_PATH"
+fi
+
+echo "[DEBUG] Cloning device tree to: $DEVICE_TREE_PATH"
+git clone ${DEVICE_TREE_URL} -b ${DEVICE_TREE_BRANCH} ${DEVICE_TREE_PATH}
+
+if [ ! -d "$DEVICE_TREE_PATH" ]; then
+    echo "[ERROR] Failed to clone device tree!"
+    exit 1
+fi
 
 # Navigate to device tree
-DEVICE_PATH="device/${VENDOR_NAME}/${DEVICE_CODENAME}"
-cd "$DEVICE_PATH"
+cd "$DEVICE_TREE_PATH"
+echo "[DEBUG] Device tree contents:"
+ls -la
 
 echo "--- Memperbaiki BoardConfig.mk untuk OrangeFox... ---"
-# Backup original BoardConfig.mk
-cp BoardConfig.mk BoardConfig.mk.bak
+if [ -f "BoardConfig.mk" ]; then
+    echo "[DEBUG] Backing up original BoardConfig.mk..."
+    cp BoardConfig.mk BoardConfig.mk.bak
+fi
 
 # Create updated BoardConfig.mk with OrangeFox configurations
-cat > BoardConfig.mk << 'EOF'
+cat > BoardConfig.mk << 'BOARDCONFIG_EOF'
 #
 # Copyright (C) 2025 The Android Open Source Project
 # SPDX-License-Identifier: Apache-2.0
@@ -188,7 +248,7 @@ TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 # TWRP specific build flags
 TW_THEME := portrait_hdpi
 TW_EXTRA_LANGUAGES := true
-TW_SCREEN_BLANK_ON_BOOT := true
+TW_SCREEN_BLANK_ON_BOOT := false
 TW_INPUT_BLACKLIST := "hbtp_vm"
 RECOVERY_SDCARD_ON_DATA := true
 TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
@@ -213,11 +273,13 @@ TW_EXCLUDE_APEX := true
 # Debug flags
 TARGET_USES_LOGD := true
 TWRP_INCLUDE_LOGCAT := true
-EOF
+BOARDCONFIG_EOF
+
+echo "[DEBUG] BoardConfig.mk updated successfully"
 
 echo "--- Membuat init.recovery.mt6761.rc untuk touchscreen support... ---"
 mkdir -p recovery/root
-cat > recovery/root/init.recovery.mt6761.rc << 'EOF'
+cat > recovery/root/init.recovery.mt6761.rc << 'INIT_EOF'
 on init
     # Mount debugfs
     mount debugfs debugfs /sys/kernel/debug
@@ -255,10 +317,12 @@ service touch_fix /sbin/sh -c "echo 1 > /sys/devices/platform/soc/11010000.spi2/
 
 on property:recovery.service=main
     start touch_fix
-EOF
+INIT_EOF
+
+echo "[DEBUG] init.recovery.mt6761.rc created"
 
 echo "--- Membuat vendorsetup.sh untuk OrangeFox... ---"
-cat > vendorsetup.sh << 'EOF'
+cat > vendorsetup.sh << 'VENDOR_EOF'
 #
 # OrangeFox Variables for X6512
 #
@@ -319,19 +383,21 @@ export OF_ENABLE_LPTOOLS=1
 export FOX_DELETE_AROMAFM=1
 export FOX_ENABLE_APP_MANAGER=1
 
-# Build type
-export FOX_BUILD_TYPE=Stable
-export OF_MAINTAINER_AVATAR="$HOME/maintainer.png"
-
 echo "OrangeFox environment variables loaded for X6512"
-EOF
+VENDOR_EOF
 
-echo "--- Kembali ke direktori build root... ---"
+echo "[DEBUG] vendorsetup.sh created"
+
+# Return to build root
 cd "$WORKDIR/orangefox"
+echo "[DEBUG] Back to build root: $(pwd)"
 
 # Source and export OrangeFox variables
 echo "--- Setting up build environment... ---"
 source build/envsetup.sh
+
+echo "[DEBUG] Available lunch targets:"
+lunch 2>&1 | grep -E "omni_|aosp_" | head -10
 
 # Export critical variables for OrangeFox
 export ALLOW_MISSING_DEPENDENCIES=true
@@ -352,15 +418,29 @@ export OF_SCREEN_W=720
 # Lunch target
 echo "--- Running lunch for omni_${DEVICE_CODENAME}-eng... ---"
 lunch omni_${DEVICE_CODENAME}-eng || {
-    echo "Lunch failed, trying alternative..."
-    lunch aosp_${DEVICE_CODENAME}-eng
+    echo "[WARNING] lunch omni_${DEVICE_CODENAME}-eng failed, trying aosp..."
+    lunch aosp_${DEVICE_CODENAME}-eng || {
+        echo "[ERROR] Both lunch targets failed!"
+        echo "[DEBUG] Available products:"
+        ls device/*/*/*.mk 2>/dev/null | grep -E "omni_|aosp_" | head -5
+        exit 1
+    }
 }
+
+echo "[DEBUG] Lunch successful, starting build..."
 
 # Build
 echo "--- Starting compilation: make ${BUILD_TARGET}image... ---"
+echo "[DEBUG] Using $(nproc --all) CPU cores"
+
 mka ${BUILD_TARGET}image -j$(nproc --all) || {
-    echo "Build failed with mka, trying make..."
-    make ${BUILD_TARGET}image -j$(nproc --all)
+    echo "[WARNING] Build failed with mka, trying make..."
+    make ${BUILD_TARGET}image -j$(nproc --all) || {
+        echo "[ERROR] Build failed!"
+        echo "[DEBUG] Last 50 lines of build log:"
+        tail -50 out/error.log 2>/dev/null || echo "No error log found"
+        exit 1
+    }
 }
 
 # Copy output
@@ -369,59 +449,45 @@ RESULT_DIR="$WORKDIR/orangefox/out/target/product/${DEVICE_CODENAME}"
 OUTPUT_DIR="$WORKDIR/output"
 mkdir -p "$OUTPUT_DIR"
 
-# Find and copy all recovery images and zips
-echo "--- Searching for output files... ---"
+echo "[DEBUG] Looking for output files in: $RESULT_DIR"
+
 if [ -d "$RESULT_DIR" ]; then
+    echo "[DEBUG] Contents of result directory:"
+    ls -la "$RESULT_DIR" | grep -E "\.img|\.zip"
+    
     # Copy boot.img (primary target for A/B device)
-    [ -f "$RESULT_DIR/boot.img" ] && cp "$RESULT_DIR/boot.img" "$OUTPUT_DIR/OrangeFox-${FOX_VERSION}-${DEVICE_CODENAME}-boot.img"
+    if [ -f "$RESULT_DIR/boot.img" ]; then
+        echo "[DEBUG] Found boot.img, copying..."
+        cp "$RESULT_DIR/boot.img" "$OUTPUT_DIR/OrangeFox-${FOX_VERSION}-${DEVICE_CODENAME}-boot.img"
+    fi
     
     # Copy any OrangeFox zips
-    find "$RESULT_DIR" -name "OrangeFox*.zip" -exec cp {} "$OUTPUT_DIR/" \;
+    find "$RESULT_DIR" -name "OrangeFox*.zip" 2>/dev/null | while read zipfile; do
+        echo "[DEBUG] Found zip: $(basename $zipfile)"
+        cp "$zipfile" "$OUTPUT_DIR/"
+    done
     
     # Copy recovery.img if exists
-    [ -f "$RESULT_DIR/recovery.img" ] && cp "$RESULT_DIR/recovery.img" "$OUTPUT_DIR/OrangeFox-${FOX_VERSION}-${DEVICE_CODENAME}-recovery.img"
+    if [ -f "$RESULT_DIR/recovery.img" ]; then
+        echo "[DEBUG] Found recovery.img, copying..."
+        cp "$RESULT_DIR/recovery.img" "$OUTPUT_DIR/OrangeFox-${FOX_VERSION}-${DEVICE_CODENAME}-recovery.img"
+    fi
     
     # Copy any other img files
-    find "$RESULT_DIR" -maxdepth 1 -name "*.img" -exec cp {} "$OUTPUT_DIR/" \;
+    find "$RESULT_DIR" -maxdepth 1 -name "*.img" 2>/dev/null | while read imgfile; do
+        echo "[DEBUG] Found img: $(basename $imgfile)"
+        cp "$imgfile" "$OUTPUT_DIR/"
+    done
+else
+    echo "[ERROR] Result directory not found!"
+    exit 1
 fi
 
 echo "--- Build completed! Output files: ---"
-ls -lh "$OUTPUT_DIR"
+ls -lh "$OUTPUT_DIR" 2>/dev/null || echo "[WARNING] No output files found"
 echo "========================================"
-```
+echo " Build Selesai "
+echo "========================================"
 
-## 2. **.cirrus.yml** (Tetap sama, tidak perlu diubah)
-
-File .cirrus.yml yang kamu berikan sudah benar dan tidak perlu diubah. Script build_twrp.sh akan menangani semua perubahan yang diperlukan.
-
-## Penjelasan Perbaikan:
-
-1. **Script Otomatis**: Semua file yang diperlukan (BoardConfig.mk yang diperbaiki, init.recovery.mt6761.rc, vendorsetup.sh) dibuat otomatis oleh script.
-
-2. **Touchscreen Support**: 
-   - Menambahkan init script untuk MT6761 yang akan mencoba mengaktifkan touchscreen Omnivision TCM SPI
-   - Multiple fallback paths untuk berbagai kemungkinan lokasi driver
-
-3. **Non-Touch Navigation**:
-   - Volume Up/Down: Navigasi
-   - Power Button: Select
-   - Diaktifkan melalui OF_USE_KEY_HANDLER dan OF_KEY_NAVIGATION
-
-4. **A/B Device Support**:
-   - Target boot.img (bukan recovery.img)
-   - Flag FOX_AB_DEVICE=1
-   - BOARD_USES_RECOVERY_AS_BOOT := true
-
-5. **MT6761 Specific**:
-   - Platform settings yang tepat
-   - CPU temp path yang benar
-   - USB gadget configuration
-
-Script ini akan otomatis:
-- Clone OrangeFox source
-- Setup device tree
-- Patch semua file yang diperlukan
-- Build boot.img dengan OrangeFox
-- Copy hasil ke folder output
-
-Navigasi tanpa touchscreen akan otomatis aktif, dan touchscreen akan dicoba untuk diaktifkan saat boot recovery.
+# Disable debugging
+set +x
