@@ -159,6 +159,55 @@ fi
 debug_log "Device tree contents:"
 ls -la $DEVICE_PATH
 
+# Fix the missing recovery.fstab issue
+echo "--- Fixing recovery.fstab issue... ---"
+# Create the required directory structure
+mkdir -p $DEVICE_PATH/recovery/root/system/etc
+
+# Check if recovery.fstab exists in the device tree root
+if [ -f "$DEVICE_PATH/recovery.fstab" ]; then
+    echo "Copying recovery.fstab to required location..."
+    cp $DEVICE_PATH/recovery.fstab $DEVICE_PATH/recovery/root/system/etc/recovery.fstab
+elif [ -f "$DEVICE_PATH/recovery/root/etc/recovery.fstab" ]; then
+    echo "Copying recovery.fstab from recovery/root/etc..."
+    cp $DEVICE_PATH/recovery/root/etc/recovery.fstab $DEVICE_PATH/recovery/root/system/etc/recovery.fstab
+else
+    echo "Creating recovery.fstab..."
+    # Create a basic recovery.fstab
+    cat > $DEVICE_PATH/recovery/root/system/etc/recovery.fstab << 'FSTAB_EOF'
+# mount point    fstype    device                                       flags
+/boot            emmc      /dev/block/by-name/boot                     flags=slotselect;display="Boot";backup=1;flashimg=1
+/system          ext4      /dev/block/mapper/system                    flags=display="System";backup=0;logical
+/vendor          ext4      /dev/block/mapper/vendor                    flags=display="Vendor";backup=0;logical
+/product         ext4      /dev/block/mapper/product                   flags=display="Product";backup=0;logical
+/system_ext      ext4      /dev/block/mapper/system_ext                flags=display="System_ext";backup=0;logical
+/metadata        ext4      /dev/block/by-name/metadata                 flags=display="Metadata"
+/data            f2fs      /dev/block/by-name/userdata                 flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption,metadata_encryption=aes-256-xts:wrappedkey_v0
+/cache           ext4      /dev/block/by-name/cache                    flags=display="Cache"
+/recovery        emmc      /dev/block/by-name/recovery                 flags=slotselect;display="Recovery";backup=1;flashimg=1
+/persist         ext4      /dev/block/by-name/persist                  flags=display="Persist"
+/firmware        vfat      /dev/block/by-name/modem                    flags=slotselect;display="Firmware";mounttodecrypt;fsflags=ro
+/misc            emmc      /dev/block/by-name/misc                     flags=display="Misc"
+/modem           emmc      /dev/block/by-name/modem                    flags=slotselect;backup=1;display="Modem"
+/bluetooth       emmc      /dev/block/by-name/bluetooth                flags=slotselect;backup=1;subpartitionof=/modem
+/dsp             emmc      /dev/block/by-name/dsp                      flags=slotselect;backup=1;subpartitionof=/modem
+/efs1            emmc      /dev/block/by-name/modemst1                 flags=backup=1;display="EFS"
+/efs2            emmc      /dev/block/by-name/modemst2                 flags=backup=1;subpartitionof=/efs1
+/efsc            emmc      /dev/block/by-name/fsc                      flags=backup=1;subpartitionof=/efs1
+/efsg            emmc      /dev/block/by-name/fsg                      flags=backup=1;subpartitionof=/efs1
+
+# Removable storage
+/external_sd     auto      /dev/block/mmcblk1p1                        flags=display="MicroSD";storage;wipeingui;removable
+/usb_otg         auto      /dev/block/sda1                             flags=display="USB Storage";storage;wipeingui;removable
+FSTAB_EOF
+fi
+
+# Also copy to the old location if needed
+if [ ! -f "$DEVICE_PATH/recovery/root/etc/recovery.fstab" ]; then
+    mkdir -p $DEVICE_PATH/recovery/root/etc
+    cp $DEVICE_PATH/recovery/root/system/etc/recovery.fstab $DEVICE_PATH/recovery/root/etc/recovery.fstab
+fi
+
 # Fix BoardConfig.mk - Remove all export statements
 echo "--- Fixing BoardConfig.mk (removing export statements)... ---"
 if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
@@ -304,10 +353,22 @@ TARGET_SCREEN_WIDTH := 1080
 # Soong namespaces
 PRODUCT_SOONG_NAMESPACES += \\
     \$(LOCAL_PATH)
+
+# Recovery
+PRODUCT_COPY_FILES += \\
+    \$(LOCAL_PATH)/recovery/root/system/etc/recovery.fstab:\$(TARGET_RECOVERY_ROOT_OUT)/system/etc/recovery.fstab
 EOF
 else
     # Just make sure device.mk doesn't have export statements
     sed -i 's/^export //g' device.mk
+    
+    # Add recovery.fstab copy rule if not present
+    if ! grep -q "recovery.fstab" device.mk; then
+        echo "" >> device.mk
+        echo "# Recovery" >> device.mk
+        echo "PRODUCT_COPY_FILES += \\" >> device.mk
+        echo "    \$(LOCAL_PATH)/recovery/root/system/etc/recovery.fstab:\$(TARGET_RECOVERY_ROOT_OUT)/system/etc/recovery.fstab" >> device.mk
+    fi
 fi
 
 cd $WORK_DIR
@@ -448,6 +509,9 @@ TW_EXCLUDE_DEFAULT_USB_INIT := true
 # Debug
 TW_INCLUDE_LOGCAT := true
 TARGET_USES_LOGD := true
+
+# Recovery fstab
+TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 BOARD_EOF
     fi
 fi
