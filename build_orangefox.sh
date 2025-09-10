@@ -163,22 +163,30 @@ ls -la $DEVICE_PATH
 echo "--- Fixing device tree makefiles... ---"
 cd $DEVICE_PATH
 
-# Create twrp makefile if not exists
-if [ ! -f "twrp_${DEVICE_CODENAME}.mk" ]; then
-    if [ -f "omni_${DEVICE_CODENAME}.mk" ]; then
-        debug_log "Creating twrp_${DEVICE_CODENAME}.mk from omni_${DEVICE_CODENAME}.mk"
-        cp "omni_${DEVICE_CODENAME}.mk" "twrp_${DEVICE_CODENAME}.mk"
-        sed -i "s/omni_/twrp_/g" "twrp_${DEVICE_CODENAME}.mk"
-        sed -i "s/vendor\/omni/vendor\/twrp/g" "twrp_${DEVICE_CODENAME}.mk"
-        sed -i "s/PRODUCT_NAME := omni_/PRODUCT_NAME := twrp_/g" "twrp_${DEVICE_CODENAME}.mk"
-    else
-        echo "[WARNING] No omni makefile found, creating basic twrp makefile"
-        cat > "twrp_${DEVICE_CODENAME}.mk" << EOF
+# Fix the twrp makefile - remove or replace problematic includes
+if [ -f "twrp_${DEVICE_CODENAME}.mk" ]; then
+    debug_log "Fixing twrp_${DEVICE_CODENAME}.mk..."
+    
+    # Remove the problematic embedded.mk include and replace with proper TWRP includes
+    sed -i '/embedded\.mk/d' "twrp_${DEVICE_CODENAME}.mk"
+    sed -i '/core_64_bit\.mk/d' "twrp_${DEVICE_CODENAME}.mk"
+    sed -i '/full_base_telephony\.mk/d' "twrp_${DEVICE_CODENAME}.mk"
+    
+    # Create a proper twrp makefile
+    cat > "twrp_${DEVICE_CODENAME}.mk" << EOF
+# Copyright (C) 2025 The Android Open Source Project
+# Copyright (C) 2025 TeamWin Recovery Project
+# Copyright (C) 2025 OrangeFox Recovery Project
+
+# Inherit from those products. Most specific first.
+\$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
+\$(call inherit-product, \$(SRC_TARGET_DIR)/product/aosp_base.mk)
+
+# Inherit from our custom product configuration
+\$(call inherit-product, vendor/twrp/config/common.mk)
+
 # Inherit from device
 \$(call inherit-product, device/infinix/${DEVICE_CODENAME}/device.mk)
-
-# Inherit TWRP product
-\$(call inherit-product, vendor/twrp/config/common.mk)
 
 # Device identifier
 PRODUCT_DEVICE := ${DEVICE_CODENAME}
@@ -186,21 +194,98 @@ PRODUCT_NAME := twrp_${DEVICE_CODENAME}
 PRODUCT_BRAND := Infinix
 PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
 PRODUCT_MANUFACTURER := Infinix
+
+# HACK: Set vendor patch level
+PRODUCT_PROPERTY_OVERRIDES += \\
+    ro.vendor.build.security_patch=2099-12-31 \\
+    ro.bootimage.build.date.utc=0 \\
+    ro.build.date.utc=0
 EOF
-    fi
+fi
+
+# Also fix omni makefile if it exists
+if [ -f "omni_${DEVICE_CODENAME}.mk" ]; then
+    debug_log "Fixing omni_${DEVICE_CODENAME}.mk..."
+    
+    sed -i '/embedded\.mk/d' "omni_${DEVICE_CODENAME}.mk"
+    sed -i '/core_64_bit\.mk/d' "omni_${DEVICE_CODENAME}.mk"
+    sed -i '/full_base_telephony\.mk/d' "omni_${DEVICE_CODENAME}.mk"
+    
+    # Update omni makefile
+    cat > "omni_${DEVICE_CODENAME}.mk" << EOF
+# Copyright (C) 2025 The Android Open Source Project
+# Copyright (C) 2025 TeamWin Recovery Project
+
+# Inherit from those products. Most specific first.
+\$(call inherit-product, \$(SRC_TARGET_DIR)/product/core_64_bit.mk)
+\$(call inherit-product, \$(SRC_TARGET_DIR)/product/aosp_base.mk)
+
+# Inherit from our custom product configuration
+\$(call inherit-product, vendor/twrp/config/common.mk)
+
+# Inherit from device
+\$(call inherit-product, device/infinix/${DEVICE_CODENAME}/device.mk)
+
+# Device identifier
+PRODUCT_DEVICE := ${DEVICE_CODENAME}
+PRODUCT_NAME := omni_${DEVICE_CODENAME}
+PRODUCT_BRAND := Infinix
+PRODUCT_MODEL := Infinix ${DEVICE_CODENAME}
+PRODUCT_MANUFACTURER := Infinix
+
+PRODUCT_PROPERTY_OVERRIDES += \\
+    ro.vendor.build.security_patch=2099-12-31
+EOF
 fi
 
 # Update AndroidProducts.mk
 debug_log "Updating AndroidProducts.mk..."
 cat > AndroidProducts.mk << EOF
 PRODUCT_MAKEFILES := \\
-    \$(LOCAL_DIR)/twrp_${DEVICE_CODENAME}.mk
+    \$(LOCAL_DIR)/twrp_${DEVICE_CODENAME}.mk \\
+    \$(LOCAL_DIR)/omni_${DEVICE_CODENAME}.mk
 
 COMMON_LUNCH_CHOICES := \\
     twrp_${DEVICE_CODENAME}-user \\
     twrp_${DEVICE_CODENAME}-userdebug \\
-    twrp_${DEVICE_CODENAME}-eng
+    twrp_${DEVICE_CODENAME}-eng \\
+    omni_${DEVICE_CODENAME}-eng
 EOF
+
+# Ensure device.mk exists
+if [ ! -f "device.mk" ]; then
+    debug_log "Creating device.mk..."
+    cat > device.mk << EOF
+# Device Path
+LOCAL_PATH := device/infinix/${DEVICE_CODENAME}
+
+# A/B
+AB_OTA_UPDATER := true
+
+# Boot
+BOARD_BOOT_HEADER_VERSION := 2
+
+# Dynamic Partitions
+PRODUCT_USE_DYNAMIC_PARTITIONS := true
+
+# Fastbootd
+PRODUCT_PACKAGES += \\
+    android.hardware.fastboot@1.0-impl-mock \\
+    fastbootd
+
+# API
+PRODUCT_TARGET_VNDK_VERSION := 30
+PRODUCT_SHIPPING_API_LEVEL := 30
+
+# Screen
+TARGET_SCREEN_HEIGHT := 2400
+TARGET_SCREEN_WIDTH := 1080
+
+# Soong namespaces
+PRODUCT_SOONG_NAMESPACES += \\
+    \$(LOCAL_PATH)
+EOF
+fi
 
 cd $WORK_DIR
 
