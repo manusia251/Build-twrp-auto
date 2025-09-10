@@ -1,121 +1,63 @@
+env:
+  # GitHub Config
+  GITHUB_USER: manusia
+  GITHUB_EMAIL: ndktau@gmail.com
+  
+  # Device Config
+  DEVICE_TREE: https://github.com/manusia251/twrp-test.git
+  DEVICE_BRANCH: main
+  DEVICE_CODENAME: X6512
+  MANIFEST_BRANCH: fox_12.1
+  TARGET_RECOVERY_IMAGE: boot
+  
+  # Build Environment
+  ALLOW_MISSING_DEPENDENCIES: true
+  FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER: 1
+  LC_ALL: "C"
+  USE_CCACHE: 1
+  CCACHE_DIR: "/tmp/ccache"
+
 task:
-  name: Build OrangeFox X6512 (boot.img)
+  name: "OrangeFox Recovery Build - Infinix X6512"
+  timeout_in: 120m
+  
   container:
     image: ubuntu:20.04
     cpu: 8
     memory: 32G
-  environment:
-    DEVICE_TREE: https://github.com/manusia251/twrp-test.git
-    DEVICE_BRANCH: main
-    DEVICE_CODENAME: X6512
-    DEVICE_NAME: Infinix
-    MANIFEST_BRANCH: fox_12.1
-    TARGET_RECOVERY_IMAGE: boot
-    DEBIAN_FRONTEND: noninteractive
-    # Touchscreen fix environment
-    TOUCH_DRIVER: omnivision_tcm_spi
-    TOUCH_DEVICE: spi2.0
-    # Enable ADB debugging by default
-    FOX_ENABLE_ADB: 1
-    FOX_DEBUG_MODE: 1
-  install_script:
-    # Fix repository sources for Docker container
+    
+  setup_script:
     - |
-      echo "Fixing repository sources..."
-      cat > /etc/apt/sources.list << 'EOL'
-      deb http://archive.ubuntu.com/ubuntu/ focal main restricted universe multiverse
-      deb http://archive.ubuntu.com/ubuntu/ focal-updates main restricted universe multiverse
-      deb http://archive.ubuntu.com/ubuntu/ focal-backports main restricted universe multiverse
-      deb http://security.ubuntu.com/ubuntu focal-security main restricted universe multiverse
-      EOL
-    # Update package lists
-    - apt-get update -y
-    # Install SSH and required packages (PENTING: tambahkan openssh-client)
+      set -e
+      echo "=== Setting up build environment ==="
+      apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg \
+        gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool \
+        libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils \
+        lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+        python3 python3-pip python-is-python3 repo wget ca-certificates \
+        adb fastboot openssh-client openjdk-11-jdk lsb-release
+      
+      # Setup Java
+      export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+      export PATH=$JAVA_HOME/bin:$PATH
+      update-alternatives --set java /usr/lib/jvm/java-11-openjdk-amd64/bin/java
+      
+  build_script:
     - |
-      apt-get install -y --no-install-recommends \
-      ca-certificates \
-      git \
-      curl \
-      wget \
-      openssh-client \
-      ssh \
-      unzip \
-      zip \
-      rsync \
-      bc \
-      build-essential \
-      gcc \
-      g++ \
-      make \
-      pkg-config \
-      flex \
-      bison \
-      gperf \
-      libssl-dev \
-      libxml2-utils \
-      xsltproc \
-      zlib1g-dev \
-      libncurses5 \
-      libncurses5-dev \
-      libtinfo5 \
-      libx11-dev \
-      libgl1-mesa-dev \
-      fontconfig \
-      python3 \
-      python3-pip \
-      python3-protobuf \
-      openjdk-11-jdk \
-      ccache \
-      lz4 \
-      zstd \
-      liblz4-tool \
-      libncursesw5 \
-      imagemagick \
-      lib32z1 \
-      lib32ncurses-dev \
-      libbz2-dev \
-      libffi-dev \
-      liblzma-dev \
-      libsqlite3-dev \
-      libreadline-dev \
-      xz-utils \
-      tk-dev
-    # Install python-is-python3 if available
-    - apt-get install -y python-is-python3 || ln -sf /usr/bin/python3 /usr/bin/python
-    # Install android tools
-    - |
-      apt-get install -y android-tools-fsutils || true
-      apt-get install -y android-sdk-libsparse-utils || true
-      apt-get install -y simg2img img2simg || true
-    # Install repo tool
-    - curl -s https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
-    - chmod +x /usr/local/bin/repo
-    # Configure git with proper credentials
-    - |
-      git config --global user.name "manusia"
-      git config --global user.email "ndktau@gmail.com"
-      git config --global color.ui false
-      # PENTING: Set git to use https instead of ssh for GitLab
-      git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
-      git config --global url."https://".insteadOf "git://"
-      # Disable SSL verification for GitLab (temporary workaround)
-      git config --global http.sslVerify false
-    # Create necessary directories
-    - mkdir -p /tmp/ccache
-    - mkdir -p /tmp/cirrus-ci-build
-  script:
-    - set -x
-    - export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-    - export PATH=$JAVA_HOME/bin:$PATH
-    - export USE_CCACHE=1
-    - export CCACHE_DIR="/tmp/ccache"
-    - export ALLOW_MISSING_DEPENDENCIES=true
-    # PENTING: Force use HTTPS instead of SSH
-    - export USE_SSH=0
-    - ccache -M 20G || true
-    - echo "[DEBUG] Current directory: $(pwd)"
-    - echo "[DEBUG] Current directory files:" && ls -la
-    - |
+      set -x
+      export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+      export PATH=$JAVA_HOME/bin:$PATH
+      export USE_CCACHE=1
+      export CCACHE_DIR="/tmp/ccache"
+      export ALLOW_MISSING_DEPENDENCIES=true
+      export USE_SSH=0
+      ccache -M 20G || true
+      
+      echo "[DEBUG] Current directory: $(pwd)"
+      echo "[DEBUG] Current directory files:" && ls -la
+      
       if [ -f build_orangefox.sh ]; then 
         chmod +x build_orangefox.sh
         echo "[DEBUG] build_orangefox.sh found and made executable"
@@ -125,14 +67,13 @@ task:
         ls -la
         exit 1
       fi
-    - echo "[DEBUG] Environment variables:"
-    - echo "DEVICE_TREE: $DEVICE_TREE"
-    - echo "DEVICE_BRANCH: $DEVICE_BRANCH"
-    - echo "DEVICE_CODENAME: $DEVICE_CODENAME"
-    - echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
-    - echo "TARGET_RECOVERY_IMAGE: $TARGET_RECOVERY_IMAGE"
-    - echo "[DEBUG] Starting OrangeFox build..."
-    - bash -x ./build_orangefox.sh "$DEVICE_TREE" "$DEVICE_BRANCH" "$DEVICE_CODENAME" "$MANIFEST_BRANCH" "$TARGET_RECOVERY_IMAGE"
-  artifacts:
-    path: output/**/*
-  timeout_in: 120m
+      
+      echo "[DEBUG] Environment variables:"
+      echo "DEVICE_TREE: $DEVICE_TREE"
+      echo "DEVICE_BRANCH: $DEVICE_BRANCH"
+      echo "DEVICE_CODENAME: $DEVICE_CODENAME"
+      echo "MANIFEST_BRANCH: $MANIFEST_BRANCH"
+      echo "TARGET_RECOVERY_IMAGE: $TARGET_RECOVERY_IMAGE"
+      
+      echo "[DEBUG] Starting OrangeFox build..."
+      bash -x ./build_orangefox.sh "$DEVICE_TREE" "$DEVICE_BRANCH" "$DEVICE_CODENAME" "$MANIFEST_BRANCH" "$TARGET_RECOVERY_IMAGE"
