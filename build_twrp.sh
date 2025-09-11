@@ -363,7 +363,7 @@ export TW_EXCLUDE_DEFAULT_USB_INIT=true
 export TW_USE_TOOLBOX=true
 export BUILD_BROKEN_DUP_RULES=true
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
-export BOARD_VNDK_VERSION=30  # Match version-vndk dari getvar
+# export BOARD_VNDK_VERSION=30  # Match version-vndk dari getvar
 export PRODUCT_FULL_TREBLE_OVERRIDE=true  # Karena treble-enabled:true
 export TARGET_SYSTEM_PROP=system.prop  # Fix syntax: hilangkan := (ini yang error)
 
