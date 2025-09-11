@@ -5,7 +5,7 @@ set -e
 DEVICE_TREE=$1
 DEVICE_BRANCH=$2
 DEVICE_CODENAME=$3
-MANIFEST_BRANCH=${4:-"twrp-12.1"}
+MANIFEST_BRANCH=${4:-"twrp-11"}
 TARGET_RECOVERY_IMAGE=${5:-"boot"}
 
 # Colors
@@ -93,7 +93,7 @@ BOARD_USES_MTK_HARDWARE := true
 
 # Architecture
 TARGET_ARCH := arm
-TARGET_ARCH_VARIANT := armv7-a-neon
+TARGET_ARCH_VARIANT := armv7-a-neon 
 TARGET_CPU_ABI := armeabi-v7a
 TARGET_CPU_ABI2 := armeabi
 TARGET_CPU_VARIANT := cortex-a53
