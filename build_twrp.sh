@@ -76,8 +76,11 @@ git clone $DEVICE_TREE -b $DEVICE_BRANCH $DEVICE_PATH || {
     exit 1
 }
 
-# Create necessary directories
+# Create necessary directories - FIX PATH STRUCTURE
+debug "Creating recovery directory structure..."
+mkdir -p $DEVICE_PATH/recovery
 mkdir -p $DEVICE_PATH/recovery/root
+mkdir -p $DEVICE_PATH/recovery/root/system
 mkdir -p $DEVICE_PATH/recovery/root/system/etc
 mkdir -p $DEVICE_PATH/recovery/root/first_stage_ramdisk
 
@@ -161,7 +164,7 @@ TARGET_COPY_OUT_SYSTEM_EXT := system_ext
 BOARD_HAS_LARGE_FILESYSTEM := true
 BOARD_USES_RECOVERY_AS_BOOT := true
 TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
-TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
+TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery.fstab
 
 # No system as root
 BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
@@ -215,7 +218,7 @@ TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
 TW_NO_SCREEN_BLANK := true
 
-# Build flags - TAMBAHAN UNTUK FIX ERROR
+# Build flags
 ALLOW_MISSING_DEPENDENCIES := true
 BUILD_BROKEN_DUP_RULES := true
 BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
@@ -230,22 +233,49 @@ mkdir -p test/vts/tools/build
 touch test/vts/tools/build/Android.host_config.mk
 echo "# Empty file to avoid build error" > test/vts/tools/build/Android.host_config.mk
 
-# Create first_stage_ramdisk fstab
-debug "Creating first_stage_ramdisk fstab..."
-cat > $DEVICE_PATH/recovery/root/first_stage_ramdisk/fstab.mt6761 << 'FSTAB_EOF'
-system /system ext4 ro wait,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey,slotselect
-system_ext /system_ext ext4 ro wait,avb,logical,first_stage_mount,slotselect
-vendor /vendor ext4 ro wait,avb,logical,first_stage_mount,slotselect
-product /product ext4 ro wait,avb,logical,first_stage_mount,slotselect
+# Create recovery.fstab in device root (MAIN FIX)
+debug "Creating recovery.fstab in device root..."
+cat > $DEVICE_PATH/recovery.fstab << 'FSTAB_EOF'
+# mount point    fstype    device                                                flags
+/system          ext4      system                                                flags=display="System";logical;slotselect
+/system_ext      ext4      system_ext                                            flags=display="System_ext";logical;slotselect
+/vendor          ext4      vendor                                                flags=display="Vendor";logical;slotselect
+/product         ext4      product                                               flags=display="Product";logical;slotselect
 
-/dev/block/platform/bootdevice/by-name/md_udc /metadata ext4 noatime,nosuid,nodev,discard wait,check,formattable,first_stage_mount
-/dev/block/platform/bootdevice/by-name/userdata /data f2fs noatime,nosuid,nodev,discard,noflush_merge,reserve_root=134217,resgid=1065,inlinecrypt,tran_gc latemount,wait,check,quota,reservedsize=128M,formattable,resize,checkpoint=fs,fileencryption=aes-256-xts:aes-256-cts:v2,keydirectory=/metadata/vold/metadata_encryption
-/dev/block/platform/bootdevice/by-name/para /misc emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/boot /boot emmc defaults first_stage_mount,nofail,slotselect
+/metadata        ext4      /dev/block/platform/bootdevice/by-name/md_udc        flags=display="Metadata";backup=1
+/data            f2fs      /dev/block/platform/bootdevice/by-name/userdata      flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption
+/boot            emmc      /dev/block/platform/bootdevice/by-name/boot          flags=display="Boot";backup=1;flashimg=1;slotselect
+/misc            emmc      /dev/block/platform/bootdevice/by-name/para          flags=display="Misc"
+
+# AVB
+/vbmeta          emmc      /dev/block/platform/bootdevice/by-name/vbmeta        flags=display="VBMeta";backup=1;flashimg=1;slotselect
+/vbmeta_system   emmc      /dev/block/platform/bootdevice/by-name/vbmeta_system flags=display="VBMeta System";backup=1;flashimg=1;slotselect  
+/vbmeta_vendor   emmc      /dev/block/platform/bootdevice/by-name/vbmeta_vendor flags=display="VBMeta Vendor";backup=1;flashimg=1;slotselect
+
+# Other partitions
+/protect_f       ext4      /dev/block/platform/bootdevice/by-name/protect1      flags=display="Protect_f";backup=1
+/protect_s       ext4      /dev/block/platform/bootdevice/by-name/protect2      flags=display="Protect_s";backup=1
+/nvdata          ext4      /dev/block/platform/bootdevice/by-name/nvdata        flags=display="Nvdata";backup=1
+/nvcfg           ext4      /dev/block/platform/bootdevice/by-name/nvcfg         flags=display="Nvcfg";backup=1
+/persist         ext4      /dev/block/platform/bootdevice/by-name/persist       flags=display="Persist";backup=1
+/nvram           emmc      /dev/block/platform/bootdevice/by-name/nvram         flags=display="Nvram";backup=1
+
+# Boot partitions
+/lk              emmc      /dev/block/platform/bootdevice/by-name/bootloader    flags=display="Bootloader";backup=1
+/lk2             emmc      /dev/block/platform/bootdevice/by-name/bootloader2   flags=display="Bootloader2";backup=1
+/logo            emmc      /dev/block/platform/bootdevice/by-name/logo          flags=display="Logo";backup=1;slotselect
+/dtbo            emmc      /dev/block/platform/bootdevice/by-name/dtbo          flags=display="Dtbo";backup=1
+
+# Super partition
+/super           emmc      /dev/block/platform/bootdevice/by-name/super         flags=display="Super";backup=1;flashimg=1
+
+# External Storage
+/external_sd     auto      /dev/block/mmcblk1p1                                 flags=display="MicroSD Card";storage;wipeingui;removable
+/usb_otg         auto      /dev/block/sda1                                      flags=display="USB OTG";storage;wipeingui;removable
 FSTAB_EOF
 
-# Create recovery.fstab
-debug "Creating recovery.fstab..."
+# Also create in recovery/root/system/etc/ for compatibility
+debug "Creating recovery.fstab in recovery directory..."
 cat > $DEVICE_PATH/recovery/root/system/etc/recovery.fstab << 'FSTAB_EOF'
 # mount point    fstype    device                                                flags
 /system          ext4      system                                                flags=display="System";logical;slotselect
@@ -278,11 +308,6 @@ cat > $DEVICE_PATH/recovery/root/system/etc/twrp.flags << 'FLAGS_EOF'
 
 # Super partition
 /super           emmc      /dev/block/platform/bootdevice/by-name/super         flags=display="Super";backup=1;flashimg=1
-
-# AVB
-/vbmeta          emmc      /dev/block/platform/bootdevice/by-name/vbmeta        flags=display="VBMeta";backup=1;flashimg=1;slotselect
-/vbmeta_system   emmc      /dev/block/platform/bootdevice/by-name/vbmeta_system flags=display="VBMeta System";backup=1;flashimg=1;slotselect  
-/vbmeta_vendor   emmc      /dev/block/platform/bootdevice/by-name/vbmeta_vendor flags=display="VBMeta Vendor";backup=1;flashimg=1;slotselect
 
 # External Storage
 /external_sd     auto      /dev/block/mmcblk1p1                                 flags=display="MicroSD Card";storage;wipeingui;removable
@@ -324,6 +349,11 @@ on boot
     start boot-hal-1-1
     start health-hal-2-1
 INIT_EOF
+
+# Verify files exist
+debug "Verifying created files..."
+ls -la $DEVICE_PATH/recovery.fstab || error "recovery.fstab not created!"
+ls -la $DEVICE_PATH/recovery/root/system/etc/recovery.fstab || error "recovery/root/system/etc/recovery.fstab not created!"
 
 # Setup build environment
 debug "Setting up build environment..."
