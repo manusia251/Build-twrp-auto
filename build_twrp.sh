@@ -6,7 +6,7 @@ DEVICE_TREE=$1
 DEVICE_BRANCH=$2
 DEVICE_CODENAME=$3
 MANIFEST_BRANCH=${4:-"twrp-11"}
-TARGET_RECOVERY_IMAGE=${5:-"vendor_boot"}
+TARGET_RECOVERY_IMAGE=${5:-"boot"}
 
 # Colors
 RED='\033[0;31m'
@@ -31,8 +31,8 @@ success() {
 }
 
 echo "================================================"
-echo "     TWRP Vendor Boot Builder for $DEVICE_CODENAME"
-echo "     Target: vendor_boot.img"
+echo "     TWRP Boot Builder for $DEVICE_CODENAME"
+echo "     Target: boot.img (A/B device)"
 echo "     Touch: MediaTek TPD (built-in driver)"
 echo "================================================"
 
@@ -94,16 +94,34 @@ mkdir -p $DEVICE_PATH/recovery/root
 debug "Current BoardConfig.mk content:"
 cat $DEVICE_PATH/BoardConfig.mk || true
 
-# Update BoardConfig.mk - but don't duplicate if already exists
-if ! grep -q "BOARD_BOOT_HEADER_VERSION := 4" $DEVICE_PATH/BoardConfig.mk 2>/dev/null; then
-    debug "Adding vendor_boot configuration to BoardConfig.mk..."
+# Update BoardConfig.mk for boot.img instead of vendor_boot
+if ! grep -q "BOARD_BOOT_HEADER_VERSION := 2" $DEVICE_PATH/BoardConfig.mk 2>/dev/null; then
+    debug "Adding boot.img configuration to BoardConfig.mk..."
     cat >> $DEVICE_PATH/BoardConfig.mk << 'EOF'
 
-# Vendor Boot Configuration
-BOARD_BOOT_HEADER_VERSION := 4
-BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 33554432
-BOARD_INCLUDE_DTB_IN_BOOTIMG := false
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD := $(strip $(shell cat $(DEVICE_PATH)/modules.load.recovery))
+# Boot Configuration (not vendor_boot)
+BOARD_BOOT_HEADER_VERSION := 2
+BOARD_KERNEL_BASE := 0x40000000
+BOARD_KERNEL_CMDLINE := bootopt=64S3,32S1,32S1 buildvariant=user
+BOARD_KERNEL_CMDLINE += androidboot.selinux=permissive
+BOARD_KERNEL_PAGESIZE := 2048
+BOARD_RAMDISK_OFFSET := 0x11b00000
+BOARD_KERNEL_TAGS_OFFSET := 0x07880000
+BOARD_DTB_OFFSET := 0x07880000
+BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
+BOARD_MKBOOTIMG_ARGS += --ramdisk_offset $(BOARD_RAMDISK_OFFSET)
+BOARD_MKBOOTIMG_ARGS += --tags_offset $(BOARD_KERNEL_TAGS_OFFSET)
+BOARD_MKBOOTIMG_ARGS += --dtb_offset $(BOARD_DTB_OFFSET)
+
+# A/B device flags
+AB_OTA_UPDATER := true
+AB_OTA_PARTITIONS += boot
+BOARD_USES_RECOVERY_AS_BOOT := true
+BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
+TARGET_NO_RECOVERY := false
+
+# Boot partition size (32MB as per your scatter file)
+BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
 
 # MediaTek TPD Touchscreen (built-in driver, no module needed)
 TW_CUSTOM_TOUCH_PATH := "/dev/input/event2"
@@ -112,18 +130,27 @@ TW_INPUT_BLACKLIST := "hbtp_vm"
 TW_SCREEN_BLANK_ON_BOOT := false
 TW_NO_SCREEN_BLANK := true
 
-# Recovery as vendor_boot
-BOARD_USES_RECOVERY_AS_VENDOR_BOOT := true
-BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
-
-# Additional flags for better touch support
+# TWRP Configuration
 TW_THEME := portrait_hdpi
-TW_DEVICE_VERSION := "MTK-TPD"
+TW_DEVICE_VERSION := "MTK-TPD-A/B"
+TW_INCLUDE_REPACKTOOLS := true
+TW_INCLUDE_RESETPROP := true
+TW_INCLUDE_LIBRESETPROP := true
+
+# Fix boot loop issues
+TW_NO_LEGACY_PROPS := true
+TW_OVERRIDE_SYSTEM_PROPS := \
+    "ro.bootmode=recovery" \
+    "ro.build.fingerprint=Infinix/X6512-GL/Infinix-X6512:12/SP1A.210812.016/230620V793:user/release-keys"
+
+# Skip TWRP on normal boot
+TW_SKIP_ADDITIONAL_FSTAB := true
+TW_EXCLUDE_TWRPAPP := true
 EOF
 fi
 
-# Create init.recovery.X6512.rc for MediaTek TPD
-debug "Creating init.recovery.${DEVICE_CODENAME}.rc for MediaTek TPD (built-in)..."
+# Create init.recovery.X6512.rc with boot loop prevention
+debug "Creating init.recovery.${DEVICE_CODENAME}.rc with boot loop fix..."
 cat > $DEVICE_PATH/recovery/root/init.recovery.${DEVICE_CODENAME}.rc << 'INIT_EOF'
 on init
     # Create mount points
@@ -206,6 +233,18 @@ service touch_monitor /system/bin/sh -c "while true; do cat /sys/devices/virtual
 
 on property:twrp.touch.debug=1
     start touch_monitor
+
+# Boot control service to prevent boot loops
+service bootctl_service /system/bin/sh -c "if [ -f /cache/recovery/command ]; then rm -f /cache/recovery/command; fi"
+    oneshot
+    seclabel u:r:recovery:s0
+
+on property:init.svc.recovery=running
+    start bootctl_service
+
+# Clear BCB (Boot Control Block) to prevent recovery boot loop
+on property:sys.boot_completed=1
+    exec u:r:recovery:s0 -- /system/bin/sh -c "dd if=/dev/zero of=/dev/block/by-name/misc bs=1 count=32 seek=0"
 INIT_EOF
 
 # Create default.prop for ADB
@@ -224,31 +263,46 @@ sys.usb.config=adb
 ro.mtk.tpd.devicename=mtk-tpd
 ro.mtk.tpd.driver=built-in
 persist.mtk.tpd.enabled=1
+
+# Boot control properties to prevent loops
+ro.boot.recovery_as_boot=true
+ro.boot.slot_suffix=_a
 PROP_EOF
 
-# Create recovery.fstab with vendor_boot partition
+# Create recovery.fstab with A/B support
 if [ ! -f "$DEVICE_PATH/recovery.fstab" ]; then
-    debug "Creating recovery.fstab with vendor_boot support..."
+    debug "Creating recovery.fstab with A/B support..."
     cat > $DEVICE_PATH/recovery.fstab << 'FSTAB_EOF'
 # mount point    fstype    device                                        flags
-/system          ext4      /dev/block/mapper/system                     flags=display="System";logical
-/vendor          ext4      /dev/block/mapper/vendor                     flags=display="Vendor";logical
-/product         ext4      /dev/block/mapper/product                    flags=display="Product";logical
-/system_ext      ext4      /dev/block/mapper/system_ext                 flags=display="System_ext";logical
-/boot            emmc      /dev/block/by-name/boot                      flags=display="Boot";backup=1;flashimg=1
-/recovery        emmc      /dev/block/by-name/recovery                  flags=display="Recovery";backup=1;flashimg=1
-/vendor_boot     emmc      /dev/block/by-name/vendor_boot               flags=display="Vendor Boot";backup=1;flashimg=1
+/system          ext4      /dev/block/mapper/system                     flags=display="System";logical;slotselect
+/vendor          ext4      /dev/block/mapper/vendor                     flags=display="Vendor";logical;slotselect
+/product         ext4      /dev/block/mapper/product                    flags=display="Product";logical;slotselect
+/system_ext      ext4      /dev/block/mapper/system_ext                 flags=display="System_ext";logical;slotselect
+/boot            emmc      /dev/block/by-name/boot                      flags=display="Boot";backup=1;flashimg=1;slotselect
 /data            f2fs      /dev/block/by-name/userdata                  flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized
 /cache           ext4      /dev/block/by-name/cache                     flags=display="Cache"
 /metadata        ext4      /dev/block/by-name/metadata                  flags=display="Metadata"
 /persist         ext4      /dev/block/by-name/persist                   flags=display="Persist"
 /misc            emmc      /dev/block/by-name/misc                      flags=display="Misc"
+/super           emmc      /dev/block/by-name/super                     flags=display="Super";backup=1
 
 # Removable storage
 /external_sd     auto      /dev/block/mmcblk1p1                         flags=display="MicroSD";storage;wipeingui;removable
 /usb_otg         auto      /dev/block/sda1                              flags=display="USB Storage";storage;wipeingui;removable
 FSTAB_EOF
 fi
+
+# Create twrp.flags to handle A/B slots properly
+debug "Creating twrp.flags..."
+cat > $DEVICE_PATH/twrp.flags << 'FLAGS_EOF'
+# Boot partitions
+/boot_a          emmc      /dev/block/by-name/boot_a                    flags=display="Boot A";backup=1;flashimg=1
+/boot_b          emmc      /dev/block/by-name/boot_b                    flags=display="Boot B";backup=1;flashimg=1
+
+# System Image backups
+/system_image    emmc      /dev/block/mapper/system                     flags=backup=1;flashimg=1;display="System Image"
+/vendor_image    emmc      /dev/block/mapper/vendor                     flags=backup=1;flashimg=1;display="Vendor Image"
+FLAGS_EOF
 
 # Create vendorsetup.sh
 debug "Creating vendorsetup.sh..."
@@ -263,9 +317,13 @@ export TW_DEFAULT_BRIGHTNESS=1200
 export TW_TOUCH_X_RESOLUTION=720
 export TW_TOUCH_Y_RESOLUTION=1612
 
-# Force vendor_boot build
-export BOARD_USES_RECOVERY_AS_VENDOR_BOOT=true
-export BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT=true
+# Force boot.img build (not vendor_boot)
+export BOARD_USES_RECOVERY_AS_BOOT=true
+export BOARD_BUILD_SYSTEM_ROOT_IMAGE=false
+export TARGET_NO_RECOVERY=false
+
+# A/B device configuration
+export AB_OTA_UPDATER=true
 
 # Debug flags
 export TARGET_USES_LOGD=true
@@ -273,8 +331,8 @@ export TWRP_INCLUDE_LOGCAT=true
 export TW_CRYPTO_SYSTEM_VOLD_DEBUG=true
 
 echo "========================================"
-echo "TWRP vendor_boot variables loaded"
-echo "Device: X6512"
+echo "TWRP boot.img variables loaded"
+echo "Device: X6512 (A/B)"
 echo "Touch: MediaTek TPD (built-in)"
 echo "Input: /dev/input/event2"
 echo "Resolution: 720x1612"
@@ -286,7 +344,7 @@ chmod +x $DEVICE_PATH/vendorsetup.sh
 
 # Create empty module files (since mtk-tpd is built-in)
 debug "Creating empty module files (mtk-tpd is built-in)..."
-echo "# MediaTek TPD is built-in to kernel, no modules needed" > $DEVICE_PATH/modules.load.vendor_boot
+echo "# MediaTek TPD is built-in to kernel, no modules needed" > $DEVICE_PATH/modules.load.boot
 echo "# MediaTek TPD is built-in to kernel, no modules needed" > $DEVICE_PATH/modules.load.recovery
 
 # Setup build environment
@@ -325,21 +383,16 @@ find . -name "Android.mk" -path "*/vts/*" -exec rm -f {} \; 2>/dev/null || true
 debug "Checking available build targets..."
 make help 2>&1 | grep -E "boot|recovery|vendor" || true
 
-# First, try building recovery ramdisk
-debug "Building recovery ramdisk..."
-make recoveryimage-nodeps -j$(nproc --all) 2>&1 | tee build.log || {
-    echo "Recovery ramdisk build failed, trying alternative..."
+# Build boot image
+debug "Building boot image..."
+make bootimage -j$(nproc --all) 2>&1 | tee build.log || {
+    error "Boot image build failed, trying recovery image..."
+    make recoveryimage -j$(nproc --all) 2>&1 | tee -a build.log || {
+        error "Recovery image build also failed"
+    }
 }
 
-# If no vendor_boot yet, try bootimage
-if [ ! -f "out/target/product/$DEVICE_CODENAME/vendor_boot.img" ]; then
-    debug "Trying bootimage build..."
-    make bootimage -j$(nproc --all) 2>&1 | tee -a build.log || {
-        echo "Boot image build also failed..."
-    }
-fi
-
-# Check for any ramdisk or boot images
+# Check for output
 OUTPUT_DIR="out/target/product/$DEVICE_CODENAME"
 OUTPUT_FOUND=""
 
@@ -355,19 +408,16 @@ fi
 
 # Extended list of possible outputs
 POSSIBLE_OUTPUTS=(
-    "$OUTPUT_DIR/vendor_boot.img"
-    "$OUTPUT_DIR/vendor-boot.img"
     "$OUTPUT_DIR/boot.img"
     "$OUTPUT_DIR/recovery.img"
+    "$OUTPUT_DIR/boot_a.img"
+    "$OUTPUT_DIR/boot_b.img"
     "$OUTPUT_DIR/ramdisk.img"
     "$OUTPUT_DIR/ramdisk-recovery.img"
     "$OUTPUT_DIR/ramdisk-recovery.cpio"
     "$OUTPUT_DIR/ramdisk-recovery.cpio.gz"
-    "$OUTPUT_DIR/vendor_ramdisk.img"
-    "$OUTPUT_DIR/vendor_ramdisk.cpio"
-    "$OUTPUT_DIR/vendor_ramdisk.cpio.gz"
     "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/boot.img"
-    "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/vendor_boot.img"
+    "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/recovery.img"
 )
 
 for OUTPUT in "${POSSIBLE_OUTPUTS[@]}"; do
@@ -378,64 +428,6 @@ for OUTPUT in "${POSSIBLE_OUTPUTS[@]}"; do
     fi
 done
 
-# If we found boot.img but need vendor_boot.img, try to convert
-if [ -n "$OUTPUT_FOUND" ] && [[ "$OUTPUT_FOUND" == *"boot.img"* ]] && [ "$TARGET_RECOVERY_IMAGE" == "vendor_boot" ]; then
-    debug "Found boot.img, attempting to extract and create vendor_boot.img..."
-    
-    # Create temp directory
-    TEMP_DIR="$OUTPUT_DIR/boot_extract"
-    mkdir -p $TEMP_DIR
-    
-    # Try to unpack boot.img
-    if command -v unpackbootimg &> /dev/null; then
-        unpackbootimg -i "$OUTPUT_FOUND" -o "$TEMP_DIR" || {
-            python3 system/tools/mkbootimg/unpack_bootimg.py --boot_img "$OUTPUT_FOUND" --out "$TEMP_DIR" || true
-        }
-    fi
-    
-    # Look for ramdisk
-    RAMDISK=""
-    if [ -f "$TEMP_DIR/ramdisk" ]; then
-        RAMDISK="$TEMP_DIR/ramdisk"
-    elif [ -f "$TEMP_DIR/boot.img-ramdisk" ]; then
-        RAMDISK="$TEMP_DIR/boot.img-ramdisk"
-    elif [ -f "$TEMP_DIR/boot.img-ramdisk.gz" ]; then
-        RAMDISK="$TEMP_DIR/boot.img-ramdisk.gz"
-    fi
-    
-    if [ -n "$RAMDISK" ] && [ -f "$DEVICE_PATH/prebuilt/dtb.img" ]; then
-        debug "Creating vendor_boot.img from boot.img components..."
-        
-        # If ramdisk is compressed, use as is
-        if [[ "$RAMDISK" == *.gz ]]; then
-            cp "$RAMDISK" "$OUTPUT_DIR/vendor_ramdisk.img"
-        else
-            # Compress ramdisk if not already
-            gzip -c "$RAMDISK" > "$OUTPUT_DIR/vendor_ramdisk.img"
-        fi
-        
-        # Create vendor_boot.img
-        python3 system/tools/mkbootimg/mkbootimg.py \
-            --header_version 4 \
-            --vendor_ramdisk "$OUTPUT_DIR/vendor_ramdisk.img" \
-            --dtb "$DEVICE_PATH/prebuilt/dtb.img" \
-            --vendor_cmdline "bootopt=64S3,32S1,32S1 buildvariant=user" \
-            --base 0x40000000 \
-            --pagesize 2048 \
-            --vendor_ramdisk_offset 0x11b00000 \
-            --tags_offset 0x07880000 \
-            --dtb_offset 0x07880000 \
-            --vendor_boot "$OUTPUT_DIR/vendor_boot.img" 2>&1 || {
-                error "Failed to create vendor_boot.img"
-            }
-        
-        if [ -f "$OUTPUT_DIR/vendor_boot.img" ]; then
-            OUTPUT_FOUND="$OUTPUT_DIR/vendor_boot.img"
-            success "Successfully converted boot.img to vendor_boot.img"
-        fi
-    fi
-fi
-
 # Final output handling
 if [ -n "$OUTPUT_FOUND" ]; then
     success "Build completed successfully!"
@@ -445,23 +437,13 @@ if [ -n "$OUTPUT_FOUND" ]; then
     # Create output directory
     mkdir -p /tmp/cirrus-ci-build/output
     
-    # Determine output name based on what we found
-    if [[ "$OUTPUT_FOUND" == *"vendor_boot"* ]]; then
-        OUTPUT_NAME="twrp-vendor_boot-${DEVICE_CODENAME}-$(date +%Y%m%d-%H%M%S).img"
-    else
-        OUTPUT_NAME="twrp-$(basename "$OUTPUT_FOUND" .img)-${DEVICE_CODENAME}-$(date +%Y%m%d-%H%M%S).img"
-    fi
+    # Determine output name
+    OUTPUT_NAME="twrp-boot-${DEVICE_CODENAME}-$(date +%Y%m%d-%H%M%S).img"
     
     cp "$OUTPUT_FOUND" "/tmp/cirrus-ci-build/output/$OUTPUT_NAME"
     
     # Copy build log
     cp build.log /tmp/cirrus-ci-build/output/
-    
-    # If we have a ramdisk, also save it
-    if [ -f "$OUTPUT_DIR/ramdisk-recovery.img" ] || [ -f "$OUTPUT_DIR/vendor_ramdisk.img" ]; then
-        cp "$OUTPUT_DIR/ramdisk-recovery.img" /tmp/cirrus-ci-build/output/ramdisk-recovery.img 2>/dev/null || true
-        cp "$OUTPUT_DIR/vendor_ramdisk.img" /tmp/cirrus-ci-build/output/vendor_ramdisk.img 2>/dev/null || true
-    fi
     
     # Create detailed info file
     cat > /tmp/cirrus-ci-build/output/build_info.txt << EOF
@@ -473,43 +455,42 @@ Source: $DEVICE_TREE
 Branch: $DEVICE_BRANCH
 Output: $OUTPUT_NAME
 Size: $(du -h "/tmp/cirrus-ci-build/output/$OUTPUT_NAME" | cut -f1)
-Type: $(basename "$OUTPUT_FOUND" .img)
+Type: boot.img (A/B device)
 
 Features:
 - ADB enabled by default (root access)
 - MediaTek TPD touchscreen support (built-in driver)
-- Built for vendor_boot (if supported by device)
+- A/B slot support
+- Boot loop prevention implemented
+
+Flash Instructions:
+==================
+1. Reboot to bootloader: adb reboot bootloader
+2. Flash TWRP: fastboot flash boot_a $OUTPUT_NAME
+3. For both slots: fastboot flash boot_b $OUTPUT_NAME
+4. Reboot to recovery: fastboot reboot recovery
+
+To boot system normally:
+- In TWRP, go to Reboot > System
+- TWRP will not persist on reboot (temporary install)
+
+For permanent TWRP:
+- After flashing, boot to TWRP
+- Flash Magisk or use "Install Recovery Ramdisk" option
 
 Touch Device Information:
 ========================
 Device Name: mtk-tpd
 Input Path: /dev/input/event2
-Sysfs Path: /sys/devices/virtual/input/input2
 Resolution: 720x1612
-Multi-touch: 5 slots (0-4)
-Driver Type: Built-in (no kernel module needed)
-
-Touch Events Supported:
-- BTN_TOUCH
-- ABS_X (0-719)
-- ABS_Y (0-1611)
-- ABS_MT_POSITION_X/Y
-- ABS_MT_TRACKING_ID
-- ABS_MT_SLOT (5 slots)
-
-MediaTek TPD Debug Paths:
-- /sys/devices/virtual/misc/tpd_em_log
-- /sys/bus/platform/drivers/mtk-tpd
-- /sys/module/tpd_debug
-- /sys/module/tpd_setting
-- /sys/module/tpd_misc
+Multi-touch: 5 slots
 
 Notes:
-- Touch driver is integrated into kernel (no .ko module)
-- LCD state notifications handled via tpd_fb_notifier_callback
-- Touch resume handled via GTP touch_resume_workqueue_callback
+- Boot Control Block (BCB) is cleared automatically to prevent loops
+- Uses recovery-as-boot method for A/B devices
+- Touch driver is integrated into kernel
 
-Build Type: $([[ "$OUTPUT_FOUND" == *"vendor_boot"* ]] && echo "Vendor Boot Image" || echo "Recovery/Boot Image")
+Build Type: Boot Image (A/B)
 EOF
     
     # Generate checksums
@@ -527,9 +508,9 @@ EOF
     echo "Features enabled:"
     echo "✓ ADB with root access"
     echo "✓ MediaTek TPD touchscreen (built-in)"
-    echo "✓ Multi-touch support (5 slots)"
-    echo "✓ Resolution: 720x1612"
-    echo "✓ Output: $(basename "$OUTPUT_FOUND")"
+    echo "✓ A/B slot support"
+    echo "✓ Boot loop prevention"
+    echo "✓ Output: boot.img"
     echo "================================================"
 else
     error "Build failed! No output image found"
@@ -538,29 +519,9 @@ else
     echo "================================================"
     grep -i "error\|failed\|failure" build.log | tail -50 || echo "No specific errors found"
     
-    echo ""
-    echo "All files in out directory:"
-    if [ -d "out/" ]; then
-        find out/ -type f -name "*.img" -o -name "*.cpio" -o -name "ramdisk*" 2>/dev/null | head -20 || echo "No relevant files found"
-    fi
-    
-    echo ""
-    echo "Checking if out/target/product directory exists:"
-    ls -la out/target/product/ 2>/dev/null || echo "Product directory not found"
-    
-    echo ""
-    echo "Debug information saved to build.log"
-    
     # Still save build log even on failure
     mkdir -p /tmp/cirrus-ci-build/output
     cp build.log /tmp/cirrus-ci-build/output/build_failed.log
-    
-    # Save any partial outputs
-    if [ -d "$OUTPUT_DIR" ]; then
-        find $OUTPUT_DIR -type f -name "*.img" -o -name "*.cpio" -o -name "ramdisk*" 2>/dev/null | while read file; do
-            cp "$file" /tmp/cirrus-ci-build/output/ 2>/dev/null || true
-        done
-    fi
     
     exit 1
 fi
