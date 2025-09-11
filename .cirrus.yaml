@@ -7,7 +7,7 @@ env:
   DEVICE_TREE: https://github.com/manusia251/twrp-test.git
   DEVICE_BRANCH: main
   DEVICE_CODENAME: X6512
-  MANIFEST_BRANCH: twrp-12.1
+  MANIFEST_BRANCH: twrp-11  # Ganti dari twrp-12.1
   TARGET_RECOVERY_IMAGE: boot  # Changed from vendor_boot to boot
   
   # Build Environment
