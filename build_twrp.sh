@@ -90,18 +90,20 @@ git clone $DEVICE_TREE -b $DEVICE_BRANCH $DEVICE_PATH || {
 debug "Creating recovery directory structure..."
 mkdir -p $DEVICE_PATH/recovery/root
 
-# Update BoardConfig.mk for vendor_boot
-debug "Updating BoardConfig.mk for vendor_boot and MediaTek TPD..."
-cat >> $DEVICE_PATH/BoardConfig.mk << 'EOF'
+# First, let's check what BoardConfig.mk contains
+debug "Current BoardConfig.mk content:"
+cat $DEVICE_PATH/BoardConfig.mk || true
+
+# Update BoardConfig.mk - but don't duplicate if already exists
+if ! grep -q "BOARD_BOOT_HEADER_VERSION := 4" $DEVICE_PATH/BoardConfig.mk 2>/dev/null; then
+    debug "Adding vendor_boot configuration to BoardConfig.mk..."
+    cat >> $DEVICE_PATH/BoardConfig.mk << 'EOF'
 
 # Vendor Boot Configuration
 BOARD_BOOT_HEADER_VERSION := 4
 BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE := 33554432
 BOARD_INCLUDE_DTB_IN_BOOTIMG := false
-BOARD_MKBOOTIMG_ARGS := --header_version $(BOARD_BOOT_HEADER_VERSION)
-BOARD_MKBOOTIMG_ARGS += --vendor_ramdisk_offset $(BOARD_RAMDISK_OFFSET)
-BOARD_MKBOOTIMG_ARGS += --tags_offset $(BOARD_KERNEL_TAGS_OFFSET)
-BOARD_MKBOOTIMG_ARGS += --dtb_offset 0x07880000
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD := $(strip $(shell cat $(DEVICE_PATH)/modules.load.recovery))
 
 # MediaTek TPD Touchscreen (built-in driver, no module needed)
 TW_CUSTOM_TOUCH_PATH := "/dev/input/event2"
@@ -111,15 +113,16 @@ TW_SCREEN_BLANK_ON_BOOT := false
 TW_NO_SCREEN_BLANK := true
 
 # Recovery as vendor_boot
-TARGET_RECOVERY_IMAGE := vendor_boot
 BOARD_USES_RECOVERY_AS_VENDOR_BOOT := true
+BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
 
 # Additional flags for better touch support
 TW_THEME := portrait_hdpi
 TW_DEVICE_VERSION := "MTK-TPD"
 EOF
+fi
 
-# Create init.recovery.X6512.rc optimized for MediaTek TPD
+# Create init.recovery.X6512.rc for MediaTek TPD
 debug "Creating init.recovery.${DEVICE_CODENAME}.rc for MediaTek TPD (built-in)..."
 cat > $DEVICE_PATH/recovery/root/init.recovery.${DEVICE_CODENAME}.rc << 'INIT_EOF'
 on init
@@ -261,8 +264,8 @@ export TW_TOUCH_X_RESOLUTION=720
 export TW_TOUCH_Y_RESOLUTION=1612
 
 # Force vendor_boot build
-export TARGET_RECOVERY_IMAGE=vendor_boot
 export BOARD_USES_RECOVERY_AS_VENDOR_BOOT=true
+export BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT=true
 
 # Debug flags
 export TARGET_USES_LOGD=true
@@ -283,10 +286,6 @@ chmod +x $DEVICE_PATH/vendorsetup.sh
 
 # Create empty module files (since mtk-tpd is built-in)
 debug "Creating empty module files (mtk-tpd is built-in)..."
-touch $DEVICE_PATH/modules.load.vendor_boot
-touch $DEVICE_PATH/modules.load.recovery
-
-# Add comment to module files
 echo "# MediaTek TPD is built-in to kernel, no modules needed" > $DEVICE_PATH/modules.load.vendor_boot
 echo "# MediaTek TPD is built-in to kernel, no modules needed" > $DEVICE_PATH/modules.load.recovery
 
@@ -301,7 +300,6 @@ export TW_EXCLUDE_DEFAULT_USB_INIT=true
 export TW_USE_TOOLBOX=true
 export BUILD_BROKEN_DUP_RULES=true
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
-export TARGET_RECOVERY_IMAGE=vendor_boot
 export BOARD_VNDK_VERSION=current
 export PRODUCT_FULL_TREBLE_OVERRIDE=false
 
@@ -323,85 +321,117 @@ make clean
 debug "Removing problematic makefiles..."
 find . -name "Android.mk" -path "*/vts/*" -exec rm -f {} \; 2>/dev/null || true
 
-# Try building vendor_bootimage first
-debug "Building vendor_boot image..."
-make vendorbootimage -j$(nproc --all) 2>&1 | tee build.log || {
-    echo "Primary build failed, trying alternative method..."
+# Check available build targets
+debug "Checking available build targets..."
+make help 2>&1 | grep -E "boot|recovery|vendor" || true
+
+# First, try building recovery ramdisk
+debug "Building recovery ramdisk..."
+make recoveryimage-nodeps -j$(nproc --all) 2>&1 | tee build.log || {
+    echo "Recovery ramdisk build failed, trying alternative..."
 }
 
-# If vendorbootimage fails, try recoveryimage with vendor_boot target
+# If no vendor_boot yet, try bootimage
 if [ ! -f "out/target/product/$DEVICE_CODENAME/vendor_boot.img" ]; then
-    debug "Trying recoveryimage build..."
-    make recoveryimage -j$(nproc --all) 2>&1 | tee -a build.log || {
-        echo "Recovery build also failed, checking for outputs..."
+    debug "Trying bootimage build..."
+    make bootimage -j$(nproc --all) 2>&1 | tee -a build.log || {
+        echo "Boot image build also failed..."
     }
 fi
 
-# Check for output files
+# Check for any ramdisk or boot images
 OUTPUT_DIR="out/target/product/$DEVICE_CODENAME"
 OUTPUT_FOUND=""
 
-# Debug: List all img files
-debug "Searching for output images..."
-find $OUTPUT_DIR -name "*.img" -type f 2>/dev/null | while read img; do
-    debug "Found: $img ($(du -h "$img" | cut -f1))"
-done
+# Debug: List ALL files in output directory
+debug "Listing all files in output directory..."
+if [ -d "$OUTPUT_DIR" ]; then
+    find $OUTPUT_DIR -type f -name "*.img" -o -name "*.cpio" -o -name "*.gz" -o -name "ramdisk*" 2>/dev/null | while read file; do
+        debug "Found: $file ($(du -h "$file" | cut -f1))"
+    done
+else
+    error "Output directory doesn't exist!"
+fi
 
-# Check specific outputs
+# Extended list of possible outputs
 POSSIBLE_OUTPUTS=(
     "$OUTPUT_DIR/vendor_boot.img"
     "$OUTPUT_DIR/vendor-boot.img"
-    "$OUTPUT_DIR/vendor_ramdisk.img"
-    "$OUTPUT_DIR/ramdisk-recovery.img"
+    "$OUTPUT_DIR/boot.img"
     "$OUTPUT_DIR/recovery.img"
+    "$OUTPUT_DIR/ramdisk.img"
+    "$OUTPUT_DIR/ramdisk-recovery.img"
+    "$OUTPUT_DIR/ramdisk-recovery.cpio"
+    "$OUTPUT_DIR/ramdisk-recovery.cpio.gz"
+    "$OUTPUT_DIR/vendor_ramdisk.img"
+    "$OUTPUT_DIR/vendor_ramdisk.cpio"
+    "$OUTPUT_DIR/vendor_ramdisk.cpio.gz"
+    "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/boot.img"
+    "$OUTPUT_DIR/obj/PACKAGING/target_files_intermediates/*/IMAGES/vendor_boot.img"
 )
 
 for OUTPUT in "${POSSIBLE_OUTPUTS[@]}"; do
-    if [ -f "$OUTPUT" ]; then
-        OUTPUT_FOUND="$OUTPUT"
+    if [ -f "$OUTPUT" ] || ls $OUTPUT 2>/dev/null; then
+        OUTPUT_FOUND=$(ls $OUTPUT 2>/dev/null | head -1)
         success "Found output: $OUTPUT_FOUND"
         break
     fi
 done
 
-# Try to create vendor_boot.img manually if we have components
-if [ -z "$OUTPUT_FOUND" ]; then
-    if [ -f "$OUTPUT_DIR/ramdisk-recovery.img" ] || [ -f "$OUTPUT_DIR/vendor_ramdisk.img" ]; then
-        debug "Attempting manual vendor_boot.img creation..."
+# If we found boot.img but need vendor_boot.img, try to convert
+if [ -n "$OUTPUT_FOUND" ] && [[ "$OUTPUT_FOUND" == *"boot.img"* ]] && [ "$TARGET_RECOVERY_IMAGE" == "vendor_boot" ]; then
+    debug "Found boot.img, attempting to extract and create vendor_boot.img..."
+    
+    # Create temp directory
+    TEMP_DIR="$OUTPUT_DIR/boot_extract"
+    mkdir -p $TEMP_DIR
+    
+    # Try to unpack boot.img
+    if command -v unpackbootimg &> /dev/null; then
+        unpackbootimg -i "$OUTPUT_FOUND" -o "$TEMP_DIR" || {
+            python3 system/tools/mkbootimg/unpack_bootimg.py --boot_img "$OUTPUT_FOUND" --out "$TEMP_DIR" || true
+        }
+    fi
+    
+    # Look for ramdisk
+    RAMDISK=""
+    if [ -f "$TEMP_DIR/ramdisk" ]; then
+        RAMDISK="$TEMP_DIR/ramdisk"
+    elif [ -f "$TEMP_DIR/boot.img-ramdisk" ]; then
+        RAMDISK="$TEMP_DIR/boot.img-ramdisk"
+    elif [ -f "$TEMP_DIR/boot.img-ramdisk.gz" ]; then
+        RAMDISK="$TEMP_DIR/boot.img-ramdisk.gz"
+    fi
+    
+    if [ -n "$RAMDISK" ] && [ -f "$DEVICE_PATH/prebuilt/dtb.img" ]; then
+        debug "Creating vendor_boot.img from boot.img components..."
         
-        RAMDISK=""
-        if [ -f "$OUTPUT_DIR/vendor_ramdisk.img" ]; then
-            RAMDISK="$OUTPUT_DIR/vendor_ramdisk.img"
-        elif [ -f "$OUTPUT_DIR/ramdisk-recovery.img" ]; then
-            RAMDISK="$OUTPUT_DIR/ramdisk-recovery.img"
+        # If ramdisk is compressed, use as is
+        if [[ "$RAMDISK" == *.gz ]]; then
+            cp "$RAMDISK" "$OUTPUT_DIR/vendor_ramdisk.img"
+        else
+            # Compress ramdisk if not already
+            gzip -c "$RAMDISK" > "$OUTPUT_DIR/vendor_ramdisk.img"
         fi
         
-        if [ -n "$RAMDISK" ] && [ -f "$DEVICE_PATH/prebuilt/dtb.img" ]; then
-            debug "Using ramdisk: $RAMDISK"
-            
-            # Try mkbootimg with vendor_boot parameters
-            python3 system/tools/mkbootimg/mkbootimg.py \
-                --header_version 4 \
-                --vendor_ramdisk $RAMDISK \
-                --dtb $DEVICE_PATH/prebuilt/dtb.img \
-                --vendor_cmdline "bootopt=64S3,32S1,32S1 buildvariant=user" \
-                --base 0x40000000 \
-                --pagesize 2048 \
-                --vendor_ramdisk_offset 0x11b00000 \
-                --tags_offset 0x07880000 \
-                --dtb_offset 0x07880000 \
-                --vendor_boot $OUTPUT_DIR/vendor_boot.img 2>&1 || {
-                    error "mkbootimg failed"
-                }
-            
-            if [ -f "$OUTPUT_DIR/vendor_boot.img" ]; then
-                OUTPUT_FOUND="$OUTPUT_DIR/vendor_boot.img"
-                success "Manually created vendor_boot.img"
-            fi
-        else
-            error "Missing components for manual creation"
-            [ -n "$RAMDISK" ] || error "No ramdisk found"
-            [ -f "$DEVICE_PATH/prebuilt/dtb.img" ] || error "No DTB found"
+        # Create vendor_boot.img
+        python3 system/tools/mkbootimg/mkbootimg.py \
+            --header_version 4 \
+            --vendor_ramdisk "$OUTPUT_DIR/vendor_ramdisk.img" \
+            --dtb "$DEVICE_PATH/prebuilt/dtb.img" \
+            --vendor_cmdline "bootopt=64S3,32S1,32S1 buildvariant=user" \
+            --base 0x40000000 \
+            --pagesize 2048 \
+            --vendor_ramdisk_offset 0x11b00000 \
+            --tags_offset 0x07880000 \
+            --dtb_offset 0x07880000 \
+            --vendor_boot "$OUTPUT_DIR/vendor_boot.img" 2>&1 || {
+                error "Failed to create vendor_boot.img"
+            }
+        
+        if [ -f "$OUTPUT_DIR/vendor_boot.img" ]; then
+            OUTPUT_FOUND="$OUTPUT_DIR/vendor_boot.img"
+            success "Successfully converted boot.img to vendor_boot.img"
         fi
     fi
 fi
@@ -415,28 +445,40 @@ if [ -n "$OUTPUT_FOUND" ]; then
     # Create output directory
     mkdir -p /tmp/cirrus-ci-build/output
     
-    # Copy and rename output
-    OUTPUT_NAME="twrp-vendor_boot-${DEVICE_CODENAME}-$(date +%Y%m%d-%H%M%S).img"
+    # Determine output name based on what we found
+    if [[ "$OUTPUT_FOUND" == *"vendor_boot"* ]]; then
+        OUTPUT_NAME="twrp-vendor_boot-${DEVICE_CODENAME}-$(date +%Y%m%d-%H%M%S).img"
+    else
+        OUTPUT_NAME="twrp-$(basename "$OUTPUT_FOUND" .img)-${DEVICE_CODENAME}-$(date +%Y%m%d-%H%M%S).img"
+    fi
+    
     cp "$OUTPUT_FOUND" "/tmp/cirrus-ci-build/output/$OUTPUT_NAME"
     
     # Copy build log
     cp build.log /tmp/cirrus-ci-build/output/
     
+    # If we have a ramdisk, also save it
+    if [ -f "$OUTPUT_DIR/ramdisk-recovery.img" ] || [ -f "$OUTPUT_DIR/vendor_ramdisk.img" ]; then
+        cp "$OUTPUT_DIR/ramdisk-recovery.img" /tmp/cirrus-ci-build/output/ramdisk-recovery.img 2>/dev/null || true
+        cp "$OUTPUT_DIR/vendor_ramdisk.img" /tmp/cirrus-ci-build/output/vendor_ramdisk.img 2>/dev/null || true
+    fi
+    
     # Create detailed info file
     cat > /tmp/cirrus-ci-build/output/build_info.txt << EOF
-TWRP Vendor Boot Build Information
-==================================
+TWRP Build Information
+======================
 Device: $DEVICE_CODENAME
 Date: $(date)
 Source: $DEVICE_TREE
 Branch: $DEVICE_BRANCH
 Output: $OUTPUT_NAME
 Size: $(du -h "/tmp/cirrus-ci-build/output/$OUTPUT_NAME" | cut -f1)
+Type: $(basename "$OUTPUT_FOUND" .img)
 
 Features:
 - ADB enabled by default (root access)
 - MediaTek TPD touchscreen support (built-in driver)
-- Built as vendor_boot.img (Header v4)
+- Built for vendor_boot (if supported by device)
 
 Touch Device Information:
 ========================
@@ -466,6 +508,8 @@ Notes:
 - Touch driver is integrated into kernel (no .ko module)
 - LCD state notifications handled via tpd_fb_notifier_callback
 - Touch resume handled via GTP touch_resume_workqueue_callback
+
+Build Type: $([[ "$OUTPUT_FOUND" == *"vendor_boot"* ]] && echo "Vendor Boot Image" || echo "Recovery/Boot Image")
 EOF
     
     # Generate checksums
@@ -478,14 +522,14 @@ EOF
     
     echo ""
     echo "================================================"
-    echo "         TWRP Vendor Boot Build Complete!       "
+    echo "         TWRP Build Complete!                   "
     echo "================================================"
     echo "Features enabled:"
     echo "✓ ADB with root access"
     echo "✓ MediaTek TPD touchscreen (built-in)"
     echo "✓ Multi-touch support (5 slots)"
     echo "✓ Resolution: 720x1612"
-    echo "✓ Vendor boot image (Header v4)"
+    echo "✓ Output: $(basename "$OUTPUT_FOUND")"
     echo "================================================"
 else
     error "Build failed! No output image found"
@@ -495,8 +539,14 @@ else
     grep -i "error\|failed\|failure" build.log | tail -50 || echo "No specific errors found"
     
     echo ""
-    echo "All .img files in out directory:"
-    find out/ -name "*.img" -type f -ls 2>/dev/null || echo "No .img files found"
+    echo "All files in out directory:"
+    if [ -d "out/" ]; then
+        find out/ -type f -name "*.img" -o -name "*.cpio" -o -name "ramdisk*" 2>/dev/null | head -20 || echo "No relevant files found"
+    fi
+    
+    echo ""
+    echo "Checking if out/target/product directory exists:"
+    ls -la out/target/product/ 2>/dev/null || echo "Product directory not found"
     
     echo ""
     echo "Debug information saved to build.log"
@@ -504,6 +554,13 @@ else
     # Still save build log even on failure
     mkdir -p /tmp/cirrus-ci-build/output
     cp build.log /tmp/cirrus-ci-build/output/build_failed.log
+    
+    # Save any partial outputs
+    if [ -d "$OUTPUT_DIR" ]; then
+        find $OUTPUT_DIR -type f -name "*.img" -o -name "*.cpio" -o -name "ramdisk*" 2>/dev/null | while read file; do
+            cp "$file" /tmp/cirrus-ci-build/output/ 2>/dev/null || true
+        done
+    fi
     
     exit 1
 fi
