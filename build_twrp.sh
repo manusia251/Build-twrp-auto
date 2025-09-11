@@ -81,20 +81,24 @@ mkdir -p $DEVICE_PATH/recovery/root
 mkdir -p $DEVICE_PATH/recovery/root/system/etc
 mkdir -p $DEVICE_PATH/recovery/root/first_stage_ramdisk
 
-# BoardConfig.mk - Using exact params from working TWRP
-debug "Creating BoardConfig.mk with exact working parameters..."
-cat >> $DEVICE_PATH/BoardConfig.mk << 'EOF'
+# Check if BoardConfig.mk exists and backup
+if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
+    debug "Backing up existing BoardConfig.mk..."
+    cp $DEVICE_PATH/BoardConfig.mk $DEVICE_PATH/BoardConfig.mk.bak
+fi
 
+# Create/Replace BoardConfig.mk with proper architecture
+debug "Creating BoardConfig.mk with fixed architecture..."
+cat > $DEVICE_PATH/BoardConfig.mk << 'EOF'
 # Platform
 TARGET_BOARD_PLATFORM := mt6761
 TARGET_BOOTLOADER_BOARD_NAME := mt6761
 BOARD_HAS_MTK_HARDWARE := true
 BOARD_USES_MTK_HARDWARE := true
 
-# Force 32-bit build - override TWRP checks
-BOARD_FORCE_32_BIT := true
+# Architecture - Fixed for 32-bit ARM
 TARGET_ARCH := arm
-TARGET_ARCH_VARIANT := cortex-a53  # Ganti dari armv7-a-neon ke cortex-a53
+TARGET_ARCH_VARIANT := armv8-a  # Build system requires this
 TARGET_CPU_ABI := armeabi-v7a
 TARGET_CPU_ABI2 := armeabi
 TARGET_CPU_VARIANT := cortex-a53
@@ -104,13 +108,8 @@ TARGET_2ND_CPU_ABI :=
 TARGET_2ND_CPU_ABI2 :=
 TARGET_2ND_CPU_VARIANT :=
 TARGET_USES_64_BIT_BINDER := false
-ARCH_ARM_HAVE_TLS_REGISTER := true
-
-# Override architecture checks
-BOARD_VENDOR_SEPOLICY_DIRS :=
-BUILD_BROKEN_DUP_RULES := true
-BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
-
+TARGET_SUPPORTS_32_BIT_APPS := true
+TARGET_SUPPORTS_64_BIT_APPS := false
 
 # Kernel
 TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/kernel
@@ -124,7 +123,7 @@ BOARD_KERNEL_CMDLINE := bootopt=64S3,32S1,32S twrpfastboot=1 buildvariant=eng
 BOARD_KERNEL_PAGESIZE := 2048
 BOARD_RAMDISK_OFFSET := 0x11b00000
 BOARD_KERNEL_TAGS_OFFSET := 0x07880000
-BOARD_DTB_OFFSET := 0x01f00000  # Different from tags offset!
+BOARD_DTB_OFFSET := 0x01f00000
 BOARD_KERNEL_OFFSET := 0x00008000
 BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 BOARD_MKBOOTIMG_ARGS += --ramdisk_offset $(BOARD_RAMDISK_OFFSET)
@@ -157,7 +156,7 @@ BOARD_USES_RECOVERY_AS_BOOT := true
 TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 
-# IMPORTANT: No system as root!
+# No system as root
 BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
 
 # Virtual A/B
@@ -208,9 +207,20 @@ TW_BRIGHTNESS_PATH := /sys/class/leds/lcd-backlight/brightness
 TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
 TW_NO_SCREEN_BLANK := true
+
+# Build flags
+ALLOW_MISSING_DEPENDENCIES := true
+BUILD_BROKEN_DUP_RULES := true
+BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
 EOF
 
-# Create first_stage_ramdisk fstab (from extract)
+# If original BoardConfig had additional configs, append them
+if [ -f "$DEVICE_PATH/BoardConfig.mk.bak" ]; then
+    debug "Checking for additional configs in original BoardConfig..."
+    # This is optional - you can append specific lines if needed
+fi
+
+# Create first_stage_ramdisk fstab
 debug "Creating first_stage_ramdisk fstab..."
 cat > $DEVICE_PATH/recovery/root/first_stage_ramdisk/fstab.mt6761 << 'FSTAB_EOF'
 system /system ext4 ro wait,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey,slotselect
@@ -219,49 +229,13 @@ vendor /vendor ext4 ro wait,avb,logical,first_stage_mount,slotselect
 product /product ext4 ro wait,avb,logical,first_stage_mount,slotselect
 
 /dev/block/platform/bootdevice/by-name/md_udc /metadata ext4 noatime,nosuid,nodev,discard wait,check,formattable,first_stage_mount
-/dev/block/platform/bootdevice/by-name/userdata /data f2fs noatime,nosuid,nodev,discard,noflush_merge,reserve_root=134217,resgid=1065,inlinecrypt,tran_gc latemount,wait,check,quota,reservedsize=128M,formattable,resize,checkpoint=fs,fileencryption=aes-256-xts:aes-256-cts:v2,keydirectory=/metadata/vold/metadata_encryption,
-/dev/block/platform/bootdevice/by-name/tranfs /tranfs ext4 noatime,nosuid,nodev,noauto_da_alloc,discard wait,check,formattable,nofail,first_stage_mount
-/dev/block/platform/bootdevice/by-name/protect1 /mnt/vendor/protect_f ext4 noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,formattable
-/dev/block/platform/bootdevice/by-name/protect2 /mnt/vendor/protect_s ext4 noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,formattable
-/dev/block/platform/bootdevice/by-name/nvdata /mnt/vendor/nvdata ext4 noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,formattable
-/dev/block/platform/bootdevice/by-name/nvcfg /mnt/vendor/nvcfg ext4 noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,formattable
-/dev/block/platform/bootdevice/by-name/persist /mnt/vendor/persist ext4 noatime,nosuid,nodev,noauto_da_alloc,commit=1,nodelalloc wait,check,formattable
-
-/devices/platform/externdevice* auto auto defaults voldmanaged=sdcard1:auto,encryptable=userdata
-/devices/platform/mt_usb* auto vfat defaults voldmanaged=usbotg:auto,encryptable=userdata
-
-/dev/block/platform/bootdevice/by-name/frp /persistent emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/nvram /nvram emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/proinfo /proinfo emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/lk /bootloader emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/lk2 /bootloader2 emmc defaults defaults
+/dev/block/platform/bootdevice/by-name/userdata /data f2fs noatime,nosuid,nodev,discard,noflush_merge,reserve_root=134217,resgid=1065,inlinecrypt,tran_gc latemount,wait,check,quota,reservedsize=128M,formattable,resize,checkpoint=fs,fileencryption=aes-256-xts:aes-256-cts:v2,keydirectory=/metadata/vold/metadata_encryption
 /dev/block/platform/bootdevice/by-name/para /misc emmc defaults defaults
 /dev/block/platform/bootdevice/by-name/boot /boot emmc defaults first_stage_mount,nofail,slotselect
-/dev/block/platform/bootdevice/by-name/vbmeta_vendor /vbmeta_vendor emmc defaults first_stage_mount,nofail,slotselect
-/dev/block/platform/bootdevice/by-name/vbmeta_system /vbmeta_system emmc defaults first_stage_mount,nofail,slotselect,avb=vbmeta
-/dev/block/platform/bootdevice/by-name/logo /logo emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/expdb /expdb emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/seccfg /seccfg emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/tee1 /tee1 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/tee2 /tee2 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/scp1 /scp1 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/scp2 /scp2 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/sspm_1 /sspm_1 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/sspm_2 /sspm_2 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/md1img /md1img emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/md1dsp /md1dsp emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/gz1 /gz1 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/gz2 /gz2 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/spmfw /spmfw emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/boot_para /boot_para emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/dtbo1 /dtbo1 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/dtbo2 /dtbo2 emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/dtbo /dtbo emmc defaults defaults
-/dev/block/platform/bootdevice/by-name/vbmeta /vbmeta emmc defaults defaults
 FSTAB_EOF
 
-# Create recovery.fstab with PROPER mount points (fix system_root issue)
-debug "Creating recovery.fstab with fixed mount points..."
+# Create recovery.fstab
+debug "Creating recovery.fstab..."
 cat > $DEVICE_PATH/recovery/root/system/etc/recovery.fstab << 'FSTAB_EOF'
 # mount point    fstype    device                                                flags
 /system          ext4      system                                                flags=display="System";logical;slotselect
@@ -271,13 +245,11 @@ cat > $DEVICE_PATH/recovery/root/system/etc/recovery.fstab << 'FSTAB_EOF'
 
 /metadata        ext4      /dev/block/platform/bootdevice/by-name/md_udc        flags=display="Metadata";backup=1
 /data            f2fs      /dev/block/platform/bootdevice/by-name/userdata      flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption
-/tranfs          ext4      /dev/block/platform/bootdevice/by-name/tranfs        flags=display="Tranfs"
 /boot            emmc      /dev/block/platform/bootdevice/by-name/boot          flags=display="Boot";backup=1;flashimg=1;slotselect
 /misc            emmc      /dev/block/platform/bootdevice/by-name/para          flags=display="Misc"
-/cache           ext4      /dev/block/platform/bootdevice/by-name/cache         flags=display="Cache"
 FSTAB_EOF
 
-# Create twrp.flags (copy from working)
+# Create twrp.flags
 debug "Creating twrp.flags..."
 cat > $DEVICE_PATH/recovery/root/system/etc/twrp.flags << 'FLAGS_EOF'
 # Main partitions
@@ -286,7 +258,6 @@ cat > $DEVICE_PATH/recovery/root/system/etc/twrp.flags << 'FLAGS_EOF'
 /nvdata          ext4      /dev/block/platform/bootdevice/by-name/nvdata        flags=display="Nvdata";backup=1
 /nvcfg           ext4      /dev/block/platform/bootdevice/by-name/nvcfg         flags=display="Nvcfg";backup=1
 /persist         ext4      /dev/block/platform/bootdevice/by-name/persist       flags=display="Persist";backup=1
-/persistent      emmc      /dev/block/platform/bootdevice/by-name/frp           flags=display="Persistent";backup=1
 /nvram           emmc      /dev/block/platform/bootdevice/by-name/nvram         flags=display="Nvram";backup=1
 
 # Boot partitions
@@ -294,10 +265,6 @@ cat > $DEVICE_PATH/recovery/root/system/etc/twrp.flags << 'FLAGS_EOF'
 /lk2             emmc      /dev/block/platform/bootdevice/by-name/bootloader2   flags=display="Bootloader2";backup=1
 /logo            emmc      /dev/block/platform/bootdevice/by-name/logo          flags=display="Logo";backup=1;slotselect
 /dtbo            emmc      /dev/block/platform/bootdevice/by-name/dtbo          flags=display="Dtbo";backup=1
-
-# Trustonic
-/tee1            emmc      /dev/block/platform/bootdevice/by-name/tee1          flags=display="Tee1";backup=1
-/tee2            emmc      /dev/block/platform/bootdevice/by-name/tee2          flags=display="Tee2";backup=1
 
 # Super partition
 /super           emmc      /dev/block/platform/bootdevice/by-name/super         flags=display="Super";backup=1;flashimg=1
@@ -309,11 +276,11 @@ cat > $DEVICE_PATH/recovery/root/system/etc/twrp.flags << 'FLAGS_EOF'
 
 # External Storage
 /external_sd     auto      /dev/block/mmcblk1p1                                 flags=display="MicroSD Card";storage;wipeingui;removable
-/usb-otg         auto      /dev/block/sda1                                      flags=display="USB OTG";storage;wipeingui;removable
+/usb_otg         auto      /dev/block/sda1                                      flags=display="USB OTG";storage;wipeingui;removable
 FLAGS_EOF
 
-# Create init.recovery.mt6761.rc (copy from working but add mount fixes)
-debug "Creating init.recovery.mt6761.rc with mount fixes..."
+# Create init.recovery.mt6761.rc
+debug "Creating init.recovery.mt6761.rc..."
 cat > $DEVICE_PATH/recovery/root/init.recovery.mt6761.rc << 'INIT_EOF'
 import /init.recovery.trustonic.rc
 
@@ -330,38 +297,10 @@ on post-fs
     # Support A/B feature for EMMC boot region
     symlink /dev/block/mmcblk0boot0 /dev/block/platform/bootdevice/by-name/preloader_a
     symlink /dev/block/mmcblk0boot1 /dev/block/platform/bootdevice/by-name/preloader_b
-
-    # Fix OF installer
     symlink /dev/block/platform/bootdevice /dev/block/bootdevice
-
-    # Support A/B feature for combo emmc OTA update
-    symlink /dev/block/platform/bootdevice/by-name/preloader_a /dev/block/platform/bootdevice/by-name/preloader_emmc_a
-    symlink /dev/block/platform/bootdevice/by-name/preloader_b /dev/block/platform/bootdevice/by-name/preloader_emmc_b
-    symlink /dev/block/platform/bootdevice/by-name/preloader_a /dev/block/by-name/preloader_emmc_a
-    symlink /dev/block/platform/bootdevice/by-name/preloader_b /dev/block/by-name/preloader_emmc_b
-
-    exec u:r:update_engine:s0 root root -- /system/bin/mtk_plpath_utils
-    start mtk.plpath.utils.link
 
 on fs
     install_keyring
-
-    # Wait for logical partitions to be ready
-    wait /dev/block/mapper/system${ro.boot.slot_suffix}
-    wait /dev/block/mapper/vendor${ro.boot.slot_suffix}
-    wait /dev/block/mapper/system_ext${ro.boot.slot_suffix}
-    wait /dev/block/mapper/product${ro.boot.slot_suffix}
-    
-    # Mount logical partitions - FIX: direct to proper mount points
-    mount ext4 /dev/block/mapper/system${ro.boot.slot_suffix} /system ro noatime
-    mount ext4 /dev/block/mapper/vendor${ro.boot.slot_suffix} /vendor ro noatime
-    mount ext4 /dev/block/mapper/system_ext${ro.boot.slot_suffix} /system_ext ro noatime
-    mount ext4 /dev/block/mapper/product${ro.boot.slot_suffix} /product ro noatime
-
-    # Symlinks for compatibility
-    symlink /system/bin /bin
-    symlink /system/etc /etc
-    symlink /system/lib /lib
 
 service mtk.plpath.utils.link /system/bin/mtk_plpath_utils
     class main
@@ -371,36 +310,10 @@ service mtk.plpath.utils.link /system/bin/mtk_plpath_utils
     oneshot
     seclabel u:r:recovery:s0
 
-service keystore_auth /system/bin/keystore_auth
-    oneshot
-    user system
-    group root
-    disabled
-    seclabel u:r:recovery:s0
-
-service keystore /system/bin/keystore /tmp/misc/keystore
-    user root
-    group root drmrpc readproc log
-    disabled
-    seclabel u:r:recovery:s0
-
 on boot
     start boot-hal-1-1
     start health-hal-2-1
 INIT_EOF
-
-# Create prop.default with key properties
-debug "Creating prop.default..."
-cat > $DEVICE_PATH/recovery/root/prop.default << 'PROP_EOF'
-ro.secure=0
-ro.adb.secure=0
-ro.debuggable=1
-ro.build.system_root_image=false
-persist.sys.usb.config=adb
-ro.crypto.metadata.enabled=true
-ro.crypto.support_metadata_encrypt=true
-ro.crypto.uses_fs_ioc_add_encryption_key=true
-PROP_EOF
 
 # Setup build environment
 debug "Setting up build environment..."
@@ -439,15 +352,8 @@ if [ -f "$OUTPUT_DIR/boot.img" ]; then
     echo ""
     echo "================================================"
     echo "TWRP Build Complete!"
-    echo "Fixed mount issues + exact working parameters"
-    echo "================================================"
-    echo "Features:"
-    echo "- Proper system mount (not system_root)"
-    echo "- Virtual A/B support"
-    echo "- Trustonic TEE for decrypt"
-    echo "- MediaTek optimizations"
     echo "================================================"
 else
-    error "Build failed!"
+    error "Build failed! No boot.img found"
     exit 1
 fi
