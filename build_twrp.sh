@@ -32,7 +32,7 @@ success() {
 
 echo "================================================"
 echo "     TWRP Boot Builder for $DEVICE_CODENAME"
-echo "     Target: boot.img (A/B device)"
+echo "     Target: boot.img (A/B MTK device)"
 echo "     Touch: MediaTek TPD (built-in driver)"
 echo "================================================"
 
@@ -94,16 +94,15 @@ mkdir -p $DEVICE_PATH/recovery/root
 debug "Current BoardConfig.mk content:"
 cat $DEVICE_PATH/BoardConfig.mk || true
 
-# Update BoardConfig.mk for boot.img instead of vendor_boot
+# Update BoardConfig.mk for boot.img (MTK Android 11 A/B, match getvar)
 if ! grep -q "BOARD_BOOT_HEADER_VERSION := 2" $DEVICE_PATH/BoardConfig.mk 2>/dev/null; then
     debug "Adding boot.img configuration to BoardConfig.mk..."
     cat >> $DEVICE_PATH/BoardConfig.mk << 'EOF'
 
-# Boot Configuration (not vendor_boot)
+# Boot Configuration (match getvar: Android 11, header v2 for MTK)
 BOARD_BOOT_HEADER_VERSION := 2
 BOARD_KERNEL_BASE := 0x40000000
-BOARD_KERNEL_CMDLINE := bootopt=64S3,32S1,32S1 buildvariant=user
-BOARD_KERNEL_CMDLINE += androidboot.selinux=permissive
+BOARD_KERNEL_CMDLINE := bootopt=64S3,32S1,32S1 buildvariant=user androidboot.selinux=permissive
 BOARD_KERNEL_PAGESIZE := 2048
 BOARD_RAMDISK_OFFSET := 0x11b00000
 BOARD_KERNEL_TAGS_OFFSET := 0x07880000
@@ -112,16 +111,19 @@ BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 BOARD_MKBOOTIMG_ARGS += --ramdisk_offset $(BOARD_RAMDISK_OFFSET)
 BOARD_MKBOOTIMG_ARGS += --tags_offset $(BOARD_KERNEL_TAGS_OFFSET)
 BOARD_MKBOOTIMG_ARGS += --dtb_offset $(BOARD_DTB_OFFSET)
+BOARD_MKBOOTIMG_ARGS += --dtb $(DEVICE_PATH)/prebuilt/dtb.img  # Use DTB from device tree
 
-# A/B device flags
+# Boot partition size (match getvar: 32MB / 0x2000000)
+BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
+
+# A/B device flags (match getvar: dynamic partitions, slot-count:2)
 AB_OTA_UPDATER := true
-AB_OTA_PARTITIONS += boot
+AB_OTA_PARTITIONS += boot system vendor product system_ext
 BOARD_USES_RECOVERY_AS_BOOT := true
 BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
 TARGET_NO_RECOVERY := false
-
-# Boot partition size (32MB as per your scatter file)
-BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
+TARGET_COPY_OUT_VENDOR := vendor
+TARGET_USES_UEFI := false  # MTK specific
 
 # MediaTek TPD Touchscreen (built-in driver, no module needed)
 TW_CUSTOM_TOUCH_PATH := "/dev/input/event2"
@@ -130,23 +132,22 @@ TW_INPUT_BLACKLIST := "hbtp_vm"
 TW_SCREEN_BLANK_ON_BOOT := false
 TW_NO_SCREEN_BLANK := true
 
-# TWRP Configuration
+# TWRP Configuration (MTK tweaks)
 TW_THEME := portrait_hdpi
 TW_INCLUDE_REPACKTOOLS := true
 TW_INCLUDE_RESETPROP := true
 TW_INCLUDE_LIBRESETPROP := true
+TW_HAS_DOWNLOAD_MODE := true  # Untuk MTK Download Mode
+TW_USE_MODEL_HARDWARE_ID_FOR_DEVICE_ID := true
+TW_ALWAYS_RM_RF := true  # Clean cache agresif
 
-# Fix boot loop issues
+# Fix boot loop/fastboot stuck (agresif clear BCB/misc untuk MTK)
 TW_NO_LEGACY_PROPS := true
-TW_OVERRIDE_SYSTEM_PROPS := "ro.bootmode=recovery;ro.build.fingerprint=Infinix/X6512-GL/Infinix-X6512:12/SP1A.210812.016/230620V793:user/release-keys"
-
-# Skip TWRP on normal boot
-TW_SKIP_ADDITIONAL_FSTAB := true
-TW_EXCLUDE_TWRPAPP := true
+TW_OVERRIDE_SYSTEM_PROPS := "ro.bootmode=recovery;ro.build.fingerprint=Infinix/X6512-OP/Infinix-X6512:11/RP1A.200720.011/240220V535:user/release-keys"  # Match vendor-fingerprint dari getvar
 EOF
 fi
 
-# Create init.recovery.X6512.rc with boot loop prevention
+# Create init.recovery.X6512.rc with boot loop prevention (tambah clear misc agresif untuk MTK fastboot stuck)
 debug "Creating init.recovery.${DEVICE_CODENAME}.rc with boot loop fix..."
 cat > $DEVICE_PATH/recovery/root/init.recovery.${DEVICE_CODENAME}.rc << 'INIT_EOF'
 on init
@@ -166,6 +167,9 @@ on init
     # Debug: log touch device info
     exec u:r:recovery:s0 -- /system/bin/sh -c "ls -la /dev/input/ > /tmp/input_devices.log"
     exec u:r:recovery:s0 -- /system/bin/sh -c "cat /proc/bus/input/devices > /tmp/input_info.log"
+
+    # Agresif clear BCB/misc untuk hindari fastboot stuck di MTK
+    exec u:r:recovery:s0 -- /system/bin/dd if=/dev/zero of=/dev/block/by-name/misc bs=1 count=1024
 
 on boot
     # Start ADB daemon
@@ -203,6 +207,9 @@ on boot
     exec u:r:recovery:s0 -- /system/bin/sh -c "cat /sys/devices/virtual/input/input2/enabled >> /tmp/tpd_status.log"
     exec u:r:recovery:s0 -- /system/bin/sh -c "ls -la /sys/bus/platform/drivers/mtk-tpd >> /tmp/tpd_status.log"
 
+    # Tambahan clear BCB on boot untuk MTK
+    exec u:r:recovery:s0 -- /system/bin/dd if=/dev/zero of=/dev/block/by-name/misc bs=1 count=1024
+
 on property:ro.debuggable=0
     setprop ro.debuggable 1
 
@@ -231,8 +238,8 @@ service touch_monitor /system/bin/sh -c "while true; do cat /sys/devices/virtual
 on property:twrp.touch.debug=1
     start touch_monitor
 
-# Boot control service to prevent boot loops
-service bootctl_service /system/bin/sh -c "if [ -f /cache/recovery/command ]; then rm -f /cache/recovery/command; fi"
+# Boot control service to prevent boot loops/fastboot stuck
+service bootctl_service /system/bin/sh -c "if [ -f /cache/recovery/command ]; then rm -f /cache/recovery/command; fi; dd if=/dev/zero of=/dev/block/by-name/misc bs=1 count=1024"
     oneshot
     seclabel u:r:recovery:s0
 
@@ -244,7 +251,7 @@ on property:sys.boot_completed=1
     exec u:r:recovery:s0 -- /system/bin/sh -c "dd if=/dev/zero of=/dev/block/by-name/misc bs=1 count=32 seek=0"
 INIT_EOF
 
-# Create default.prop for ADB
+# Create default.prop for ADB (match getvar fingerprint)
 debug "Creating default.prop..."
 cat > $DEVICE_PATH/recovery/root/default.prop << 'PROP_EOF'
 ro.secure=0
@@ -261,12 +268,13 @@ ro.mtk.tpd.devicename=mtk-tpd
 ro.mtk.tpd.driver=built-in
 persist.mtk.tpd.enabled=1
 
-# Boot control properties to prevent loops
+# Boot control properties to prevent loops (match getvar)
 ro.boot.recovery_as_boot=true
 ro.boot.slot_suffix=_a
+ro.build.fingerprint=Infinix/X6512-OP/Infinix-X6512:11/RP1A.200720.011/240220V535:user/release-keys
 PROP_EOF
 
-# Create recovery.fstab with A/B support
+# Create recovery.fstab with A/B support (match getvar dynamic partitions)
 if [ ! -f "$DEVICE_PATH/recovery.fstab" ]; then
     debug "Creating recovery.fstab with A/B support..."
     cat > $DEVICE_PATH/recovery.fstab << 'FSTAB_EOF'
@@ -301,7 +309,7 @@ cat > $DEVICE_PATH/twrp.flags << 'FLAGS_EOF'
 /vendor_image    emmc      /dev/block/mapper/vendor                     flags=backup=1;flashimg=1;display="Vendor Image"
 FLAGS_EOF
 
-# Create vendorsetup.sh
+# Create vendorsetup.sh (tweak untuk MTK)
 debug "Creating vendorsetup.sh..."
 cat > $DEVICE_PATH/vendorsetup.sh << 'VENDOR_EOF'
 # MediaTek TPD touchscreen configuration (built-in driver)
@@ -314,12 +322,12 @@ export TW_DEFAULT_BRIGHTNESS=1200
 export TW_TOUCH_X_RESOLUTION=720
 export TW_TOUCH_Y_RESOLUTION=1612
 
-# Force boot.img build (not vendor_boot)
+# Force boot.img build for MTK (no vendor_boot)
 export BOARD_USES_RECOVERY_AS_BOOT=true
 export BOARD_BUILD_SYSTEM_ROOT_IMAGE=false
 export TARGET_NO_RECOVERY=false
 
-# A/B device configuration
+# A/B device configuration (match getvar)
 export AB_OTA_UPDATER=true
 
 # Debug flags
@@ -329,7 +337,7 @@ export TW_CRYPTO_SYSTEM_VOLD_DEBUG=true
 
 echo "========================================"
 echo "TWRP boot.img variables loaded"
-echo "Device: X6512 (A/B)"
+echo "Device: X6512 (MTK A/B Android 11)"
 echo "Touch: MediaTek TPD (built-in)"
 echo "Input: /dev/input/event2"
 echo "Resolution: 720x1612"
@@ -348,15 +356,16 @@ echo "# MediaTek TPD is built-in to kernel, no modules needed" > $DEVICE_PATH/mo
 debug "Setting up build environment..."
 source build/envsetup.sh
 
-# Export build variables
+# Export build variables (tambah untuk MTK Android 11)
 export ALLOW_MISSING_DEPENDENCIES=true
 export LC_ALL=C
 export TW_EXCLUDE_DEFAULT_USB_INIT=true
 export TW_USE_TOOLBOX=true
 export BUILD_BROKEN_DUP_RULES=true
 export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
-export BOARD_VNDK_VERSION=current
-export PRODUCT_FULL_TREBLE_OVERRIDE=false
+export BOARD_VNDK_VERSION=30  # Match version-vndk dari getvar
+export PRODUCT_FULL_TREBLE_OVERRIDE=true  # Karena treble-enabled:true
+export TARGET_SYSTEM_PROP := system.prop  # Untuk override props
 
 # Load device configuration
 source $DEVICE_PATH/vendorsetup.sh
@@ -368,8 +377,10 @@ lunch twrp_${DEVICE_CODENAME}-eng || {
     exit 1
 }
 
-# Clean previous builds
+# Clean previous builds (lebih agresif untuk hindari cache error)
 debug "Cleaning previous builds..."
+make clobber || true
+rm -rf out/ || true
 make clean
 
 # Remove problematic makefiles
@@ -380,7 +391,7 @@ find . -name "Android.mk" -path "*/vts/*" -exec rm -f {} \; 2>/dev/null || true
 debug "Checking available build targets..."
 make help 2>&1 | grep -E "boot|recovery|vendor" || true
 
-# Build boot image
+# Build boot image (coba recoveryimage jika bootimage gagal)
 debug "Building boot image..."
 make bootimage -j$(nproc --all) 2>&1 | tee build.log || {
     error "Boot image build failed, trying recovery image..."
@@ -442,7 +453,7 @@ if [ -n "$OUTPUT_FOUND" ]; then
     # Copy build log
     cp build.log /tmp/cirrus-ci-build/output/
     
-    # Create detailed info file
+    # Create detailed info file (tambah note MTK)
     cat > /tmp/cirrus-ci-build/output/build_info.txt << EOF
 TWRP Build Information
 ======================
@@ -452,28 +463,25 @@ Source: $DEVICE_TREE
 Branch: $DEVICE_BRANCH
 Output: $OUTPUT_NAME
 Size: $(du -h "/tmp/cirrus-ci-build/output/$OUTPUT_NAME" | cut -f1)
-Type: boot.img (A/B device)
+Type: boot.img (MTK A/B Android 11)
 
 Features:
 - ADB enabled by default (root access)
 - MediaTek TPD touchscreen support (built-in driver)
-- A/B slot support
-- Boot loop prevention implemented
+- A/B slot support with agresif BCB clear
+- Boot loop/fastboot stuck prevention for MTK
 
-Flash Instructions:
+Flash Instructions (untuk MTK tanpa temporary boot):
 ==================
 1. Reboot to bootloader: adb reboot bootloader
 2. Flash TWRP: fastboot flash boot_a $OUTPUT_NAME
 3. For both slots: fastboot flash boot_b $OUTPUT_NAME
-4. Reboot to recovery: fastboot reboot recovery
+4. Erase misc: fastboot erase misc
+5. Set active slot: fastboot --set-active=a
+6. Reboot to recovery manual: Matikan HP, tekan Vol Up + Power
 
 To boot system normally:
 - In TWRP, go to Reboot > System
-- TWRP will not persist on reboot (temporary install)
-
-For permanent TWRP:
-- After flashing, boot to TWRP
-- Flash Magisk or use "Install Recovery Ramdisk" option
 
 Touch Device Information:
 ========================
@@ -483,11 +491,11 @@ Resolution: 720x1612
 Multi-touch: 5 slots
 
 Notes:
-- Boot Control Block (BCB) is cleared automatically to prevent loops
-- Uses recovery-as-boot method for A/B devices
-- Touch driver is integrated into kernel
+- Built for boot.img target (device tree from boot.img)
+- Agresif clear misc/BCB untuk hindari fastboot stuck di MTK
+- Match getvar: Android 11, dynamic partitions
 
-Build Type: Boot Image (A/B)
+Build Type: Boot Image (A/B MTK)
 EOF
     
     # Generate checksums
@@ -506,7 +514,7 @@ EOF
     echo "✓ ADB with root access"
     echo "✓ MediaTek TPD touchscreen (built-in)"
     echo "✓ A/B slot support"
-    echo "✓ Boot loop prevention"
+    echo "✓ MTK fastboot stuck prevention"
     echo "✓ Output: boot.img"
     echo "================================================"
 else
