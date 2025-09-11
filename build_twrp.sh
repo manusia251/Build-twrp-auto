@@ -143,7 +143,7 @@ BOARD_SUPER_PARTITION_GROUPS := infinix_dynamic_partitions
 BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE := 4720689152
 BOARD_INFINIX_DYNAMIC_PARTITIONS_PARTITION_LIST := system system_ext vendor product
 
-# File systems - FIX UNTUK ERROR
+# File systems
 BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
@@ -152,7 +152,7 @@ BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
 TARGET_USERIMAGES_USE_EXT4 := true
 TARGET_USERIMAGES_USE_F2FS := true
 
-# Copy out paths - FIX UNTUK ERROR
+# Copy out paths
 TARGET_COPY_OUT_VENDOR := vendor
 TARGET_COPY_OUT_PRODUCT := product
 TARGET_COPY_OUT_SYSTEM_EXT := system_ext
@@ -215,18 +215,20 @@ TW_MAX_BRIGHTNESS := 2047
 TW_DEFAULT_BRIGHTNESS := 1200
 TW_NO_SCREEN_BLANK := true
 
-# Build flags
+# Build flags - TAMBAHAN UNTUK FIX ERROR
 ALLOW_MISSING_DEPENDENCIES := true
 BUILD_BROKEN_DUP_RULES := true
 BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+BUILD_BROKEN_USES_BUILD_COPY_HEADERS := true
+BUILD_BROKEN_VINTF_PRODUCT_COPY_FILES := true
 EOF
 
-# If original BoardConfig had additional configs, append them
-if [ -f "$DEVICE_PATH/BoardConfig.mk.bak" ]; then
-    debug "Checking for additional configs in original BoardConfig..."
-    # This is optional - you can append specific lines if needed
-fi
+# Create empty Android.mk to avoid VTS error
+debug "Creating empty Android.mk files to avoid errors..."
+mkdir -p test/vts/tools/build
+touch test/vts/tools/build/Android.host_config.mk
+echo "# Empty file to avoid build error" > test/vts/tools/build/Android.host_config.mk
 
 # Create first_stage_ramdisk fstab
 debug "Creating first_stage_ramdisk fstab..."
@@ -327,9 +329,14 @@ INIT_EOF
 debug "Setting up build environment..."
 source build/envsetup.sh
 
-# Minimal exports
+# Export build variables with more flags
 export ALLOW_MISSING_DEPENDENCIES=true
 export LC_ALL=C
+export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
+export BUILD_BROKEN_VINTF_PRODUCT_COPY_FILES=true
+export BUILD_BROKEN_DUP_RULES=true
+export BUILD_BROKEN_MISSING_REQUIRED_MODULES=true
+export BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES=true
 
 # Build configuration
 debug "Setting up build configuration..."
@@ -342,11 +349,15 @@ lunch twrp_${DEVICE_CODENAME}-eng || {
 debug "Cleaning previous builds..."
 make clean
 
-# Build boot image
+# Build boot image with specific target
 debug "Building boot image..."
 make bootimage -j$(nproc --all) 2>&1 | tee build.log || {
-    error "Boot image build failed"
-    exit 1
+    # Try alternative if failed
+    debug "Trying alternative build method..."
+    mka bootimage -j$(nproc --all) 2>&1 | tee build_alt.log || {
+        error "Boot image build failed"
+        exit 1
+    }
 }
 
 # Check output
@@ -355,11 +366,13 @@ if [ -f "$OUTPUT_DIR/boot.img" ]; then
     success "Build completed!"
     mkdir -p /tmp/cirrus-ci-build/output
     cp "$OUTPUT_DIR/boot.img" /tmp/cirrus-ci-build/output/
-    cp build.log /tmp/cirrus-ci-build/output/
+    cp build.log /tmp/cirrus-ci-build/output/ || true
     
     echo ""
     echo "================================================"
     echo "TWRP Build Complete!"
+    echo "================================================"
+    echo "Output: /tmp/cirrus-ci-build/output/boot.img"
     echo "================================================"
 else
     error "Build failed! No boot.img found"
