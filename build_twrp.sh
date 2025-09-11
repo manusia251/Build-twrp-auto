@@ -76,284 +76,70 @@ git clone $DEVICE_TREE -b $DEVICE_BRANCH $DEVICE_PATH || {
     exit 1
 }
 
-# Create necessary directories - FIX PATH STRUCTURE
-debug "Creating recovery directory structure..."
-mkdir -p $DEVICE_PATH/recovery
-mkdir -p $DEVICE_PATH/recovery/root
-mkdir -p $DEVICE_PATH/recovery/root/system
-mkdir -p $DEVICE_PATH/recovery/root/system/etc
-mkdir -p $DEVICE_PATH/recovery/root/first_stage_ramdisk
-
-# Check if BoardConfig.mk exists and backup
-if [ -f "$DEVICE_PATH/BoardConfig.mk" ]; then
-    debug "Backing up existing BoardConfig.mk..."
-    cp $DEVICE_PATH/BoardConfig.mk $DEVICE_PATH/BoardConfig.mk.bak
-fi
-
-# Create/Replace BoardConfig.mk with proper architecture
-debug "Creating BoardConfig.mk with fixed architecture..."
-cat > $DEVICE_PATH/BoardConfig.mk << 'EOF'
-# Platform
-TARGET_BOARD_PLATFORM := mt6761
-TARGET_BOOTLOADER_BOARD_NAME := mt6761
-BOARD_HAS_MTK_HARDWARE := true
-BOARD_USES_MTK_HARDWARE := true
-
-# Architecture - Fixed for 32-bit ARM
-TARGET_ARCH := arm
-TARGET_ARCH_VARIANT := armv8-a
-TARGET_CPU_ABI := armeabi-v7a
-TARGET_CPU_ABI2 := armeabi
-TARGET_CPU_VARIANT := cortex-a53
-TARGET_2ND_ARCH :=
-TARGET_2ND_ARCH_VARIANT :=
-TARGET_2ND_CPU_ABI :=
-TARGET_2ND_CPU_ABI2 :=
-TARGET_2ND_CPU_VARIANT :=
-TARGET_USES_64_BIT_BINDER := false
-TARGET_SUPPORTS_32_BIT_APPS := true
-TARGET_SUPPORTS_64_BIT_APPS := false
-
-# Kernel
-TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/kernel
-BOARD_PREBUILT_DTBIMAGE_DIR := $(DEVICE_PATH)/prebuilt
-BOARD_INCLUDE_DTB_IN_BOOTIMG := true
-
-# Boot header - EXACT from working TWRP
-BOARD_BOOT_HEADER_VERSION := 2
-BOARD_KERNEL_BASE := 0x40000000
-BOARD_KERNEL_CMDLINE := bootopt=64S3,32S1,32S1 bootvariant=eng
-BOARD_KERNEL_PAGESIZE := 2048
-BOARD_RAMDISK_OFFSET := 0x11b00000
-BOARD_KERNEL_TAGS_OFFSET := 0x07880000
-BOARD_DTB_OFFSET := 0x01f00000
-BOARD_KERNEL_OFFSET := 0x00008000
-BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
-BOARD_MKBOOTIMG_ARGS += --ramdisk_offset $(BOARD_RAMDISK_OFFSET)
-BOARD_MKBOOTIMG_ARGS += --tags_offset $(BOARD_KERNEL_TAGS_OFFSET)
-BOARD_MKBOOTIMG_ARGS += --dtb_offset $(BOARD_DTB_OFFSET)
-BOARD_MKBOOTIMG_ARGS += --kernel_offset $(BOARD_KERNEL_OFFSET)
-BOARD_MKBOOTIMG_ARGS += --dtb $(DEVICE_PATH)/prebuilt/dtb.img
-
-# Partitions
-BOARD_BOOTIMAGE_PARTITION_SIZE := 33554432
-BOARD_USES_METADATA_PARTITION := true
-BOARD_ROOT_EXTRA_FOLDERS += metadata
-
-# Dynamic Partitions
-BOARD_SUPER_PARTITION_SIZE := 4722786304
-BOARD_SUPER_PARTITION_GROUPS := infinix_dynamic_partitions
-BOARD_INFINIX_DYNAMIC_PARTITIONS_SIZE := 4720689152
-BOARD_INFINIX_DYNAMIC_PARTITIONS_PARTITION_LIST := system system_ext vendor product
-
-# File systems
-BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_PRODUCTIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_SYSTEM_EXTIMAGE_FILE_SYSTEM_TYPE := ext4
-BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := f2fs
-TARGET_USERIMAGES_USE_EXT4 := true
-TARGET_USERIMAGES_USE_F2FS := true
-
-# Copy out paths
-TARGET_COPY_OUT_VENDOR := vendor
-TARGET_COPY_OUT_PRODUCT := product
-TARGET_COPY_OUT_SYSTEM_EXT := system_ext
-
-# Recovery
-BOARD_HAS_LARGE_FILESYSTEM := true
-BOARD_USES_RECOVERY_AS_BOOT := true
-TARGET_RECOVERY_PIXEL_FORMAT := "RGBX_8888"
-TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery.fstab
-
-# No system as root
-BOARD_BUILD_SYSTEM_ROOT_IMAGE := false
-
-# Virtual A/B
-ENABLE_VIRTUAL_AB := true
-AB_OTA_UPDATER := true
-AB_OTA_PARTITIONS += boot system system_ext vendor product
-
-# TWRP Configuration
-TW_THEME := portrait_hdpi
-TW_INCLUDE_RESETPROP := true
-TW_INCLUDE_REPACKTOOLS := true
-TW_EXTRA_LANGUAGES := false
-TW_DEFAULT_LANGUAGE := en
-
-# Fix mount issues
-TARGET_RECOVERY_DEVICE_DIRS += $(DEVICE_PATH)
-TW_INCLUDE_LOGICAL := true
-TW_EXCLUDE_APEX := true
-
-# Paths
-TARGET_USE_CUSTOM_LUN_FILE_PATH := /config/usb_gadget/g1/functions/mass_storage.usb0/lun.%d/file
-TW_EXCLUDE_DEFAULT_USB_INIT := true
-RECOVERY_SDCARD_ON_DATA := true
-
-# Storage
-TW_INTERNAL_STORAGE_PATH := "/data/media/0"
-TW_INTERNAL_STORAGE_MOUNT_POINT := "data"
-TW_EXTERNAL_STORAGE_PATH := "/external_sd"
-TW_EXTERNAL_STORAGE_MOUNT_POINT := "external_sd"
-
-# Crypto
-TW_INCLUDE_CRYPTO := true
-TW_INCLUDE_FBE_METADATA_DECRYPT := true
-TW_USE_FSCRYPT_POLICY := 2
-PLATFORM_SECURITY_PATCH := 2099-12-31
-VENDOR_SECURITY_PATCH := 2099-12-31
-
-# Trustonic TEE
-TRUSTONIC_TEE_SUPPORT := true
-MTK_HARDWARE := true
-
-# Debug
-TWRP_INCLUDE_LOGCAT := true
-TARGET_USES_LOGD := true
-
-# MediaTek specific
-TW_BRIGHTNESS_PATH := /sys/class/leds/lcd-backlight/brightness
-TW_MAX_BRIGHTNESS := 2047
-TW_DEFAULT_BRIGHTNESS := 1200
-TW_NO_SCREEN_BLANK := true
-
-# Build flags
-ALLOW_MISSING_DEPENDENCIES := true
-BUILD_BROKEN_DUP_RULES := true
-BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
-BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
-BUILD_BROKEN_USES_BUILD_COPY_HEADERS := true
-BUILD_BROKEN_VINTF_PRODUCT_COPY_FILES := true
-EOF
-
 # Create empty Android.mk to avoid VTS error
 debug "Creating empty Android.mk files to avoid errors..."
 mkdir -p test/vts/tools/build
 touch test/vts/tools/build/Android.host_config.mk
 echo "# Empty file to avoid build error" > test/vts/tools/build/Android.host_config.mk
 
-# Create recovery.fstab in device root (MAIN FIX)
-debug "Creating recovery.fstab in device root..."
-cat > $DEVICE_PATH/recovery.fstab << 'FSTAB_EOF'
-# mount point    fstype    device                                                flags
-/system          ext4      system                                                flags=display="System";logical;slotselect
-/system_ext      ext4      system_ext                                            flags=display="System_ext";logical;slotselect
-/vendor          ext4      vendor                                                flags=display="Vendor";logical;slotselect
-/product         ext4      product                                               flags=display="Product";logical;slotselect
-
-/metadata        ext4      /dev/block/platform/bootdevice/by-name/md_udc        flags=display="Metadata";backup=1
-/data            f2fs      /dev/block/platform/bootdevice/by-name/userdata      flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption
-/boot            emmc      /dev/block/platform/bootdevice/by-name/boot          flags=display="Boot";backup=1;flashimg=1;slotselect
-/misc            emmc      /dev/block/platform/bootdevice/by-name/para          flags=display="Misc"
-
-# AVB
-/vbmeta          emmc      /dev/block/platform/bootdevice/by-name/vbmeta        flags=display="VBMeta";backup=1;flashimg=1;slotselect
-/vbmeta_system   emmc      /dev/block/platform/bootdevice/by-name/vbmeta_system flags=display="VBMeta System";backup=1;flashimg=1;slotselect  
-/vbmeta_vendor   emmc      /dev/block/platform/bootdevice/by-name/vbmeta_vendor flags=display="VBMeta Vendor";backup=1;flashimg=1;slotselect
-
-# Other partitions
-/protect_f       ext4      /dev/block/platform/bootdevice/by-name/protect1      flags=display="Protect_f";backup=1
-/protect_s       ext4      /dev/block/platform/bootdevice/by-name/protect2      flags=display="Protect_s";backup=1
-/nvdata          ext4      /dev/block/platform/bootdevice/by-name/nvdata        flags=display="Nvdata";backup=1
-/nvcfg           ext4      /dev/block/platform/bootdevice/by-name/nvcfg         flags=display="Nvcfg";backup=1
-/persist         ext4      /dev/block/platform/bootdevice/by-name/persist       flags=display="Persist";backup=1
-/nvram           emmc      /dev/block/platform/bootdevice/by-name/nvram         flags=display="Nvram";backup=1
-
-# Boot partitions
-/lk              emmc      /dev/block/platform/bootdevice/by-name/bootloader    flags=display="Bootloader";backup=1
-/lk2             emmc      /dev/block/platform/bootdevice/by-name/bootloader2   flags=display="Bootloader2";backup=1
-/logo            emmc      /dev/block/platform/bootdevice/by-name/logo          flags=display="Logo";backup=1;slotselect
-/dtbo            emmc      /dev/block/platform/bootdevice/by-name/dtbo          flags=display="Dtbo";backup=1
-
-# Super partition
-/super           emmc      /dev/block/platform/bootdevice/by-name/super         flags=display="Super";backup=1;flashimg=1
-
-# External Storage
-/external_sd     auto      /dev/block/mmcblk1p1                                 flags=display="MicroSD Card";storage;wipeingui;removable
-/usb_otg         auto      /dev/block/sda1                                      flags=display="USB OTG";storage;wipeingui;removable
+# Create recovery.fstab in ROOT directory (FIX untuk error ninja)
+debug "Creating recovery.fstab in root directory..."
+cat > $WORK_DIR/recovery.fstab << 'FSTAB_EOF'
+/system                   ext4     system                                                   flags=display=system;logical;slotselect
+/system_ext               ext4     system_ext                                               flags=display=system_ext;logical;slotselect
+/vendor                   ext4     vendor                                                   flags=display=vendor;logical;slotselect
+/product                  ext4     product                                                  flags=display=product;logical;slotselect
+/metadata                 ext4     /dev/block/platform/bootdevice/by-name/md_udc            flags=display=metadata
+/data                     f2fs     /dev/block/platform/bootdevice/by-name/userdata          flags=display=data
+/tranfs                   ext4     /dev/block/platform/bootdevice/by-name/tranfs            flags=display=tranfs
+/mnt/vendor/protect_f     ext4     /dev/block/platform/bootdevice/by-name/protect1          flags=display=protect_f
+/mnt/vendor/protect_s     ext4     /dev/block/platform/bootdevice/by-name/protect2          flags=display=protect_s
+/mnt/vendor/nvdata        ext4     /dev/block/platform/bootdevice/by-name/nvdata            flags=display=nvdata
+/mnt/vendor/nvcfg         ext4     /dev/block/platform/bootdevice/by-name/nvcfg             flags=display=nvcfg
+/mnt/vendor/persist       ext4     /dev/block/platform/bootdevice/by-name/persist           flags=display=persist
+auto                      auto     /devices/platform/externdevice*                          flags=display=auto
+auto                      vfat     /devices/platform/mt_usb*                                flags=display=auto
+/persistent               emmc     /dev/block/platform/bootdevice/by-name/frp               flags=display=persistent
+/nvram                    emmc     /dev/block/platform/bootdevice/by-name/nvram             flags=display=nvram
+/proinfo                  emmc     /dev/block/platform/bootdevice/by-name/proinfo           flags=display=proinfo
+/bootloader               emmc     /dev/block/platform/bootdevice/by-name/lk                flags=display=bootloader
+/bootloader2              emmc     /dev/block/platform/bootdevice/by-name/lk2               flags=display=bootloader2
+/misc                     emmc     /dev/block/platform/bootdevice/by-name/para              flags=display=misc
+/boot                     emmc     /dev/block/platform/bootdevice/by-name/boot              flags=display=boot;slotselect
+/vbmeta_vendor            emmc     /dev/block/platform/bootdevice/by-name/vbmeta_vendor     flags=display=vbmeta_vendor;slotselect
+/vbmeta_system            emmc     /dev/block/platform/bootdevice/by-name/vbmeta_system     flags=display=vbmeta_system;slotselect
+/logo                     emmc     /dev/block/platform/bootdevice/by-name/logo              flags=display=logo
+/expdb                    emmc     /dev/block/platform/bootdevice/by-name/expdb             flags=display=expdb
+/seccfg                   emmc     /dev/block/platform/bootdevice/by-name/seccfg            flags=display=seccfg
+/tee1                     emmc     /dev/block/platform/bootdevice/by-name/tee1              flags=display=tee1
+/tee2                     emmc     /dev/block/platform/bootdevice/by-name/tee2              flags=display=tee2
+/scp1                     emmc     /dev/block/platform/bootdevice/by-name/scp1              flags=display=scp1
+/scp2                     emmc     /dev/block/platform/bootdevice/by-name/scp2              flags=display=scp2
+/sspm_1                   emmc     /dev/block/platform/bootdevice/by-name/sspm_1            flags=display=sspm_1
+/sspm_2                   emmc     /dev/block/platform/bootdevice/by-name/sspm_2            flags=display=sspm_2
+/md1img                   emmc     /dev/block/platform/bootdevice/by-name/md1img            flags=display=md1img
+/md1dsp                   emmc     /dev/block/platform/bootdevice/by-name/md1dsp            flags=display=md1dsp
+/md1arm7                  emmc     /dev/block/platform/bootdevice/by-name/md1arm7           flags=display=md1arm7
+/md3img                   emmc     /dev/block/platform/bootdevice/by-name/md3img            flags=display=md3img
+/gz1                      emmc     /dev/block/platform/bootdevice/by-name/gz1               flags=display=gz1
+/gz2                      emmc     /dev/block/platform/bootdevice/by-name/gz2               flags=display=gz2
+/spmfw                    emmc     /dev/block/platform/bootdevice/by-name/spmfw             flags=display=spmfw
+/boot_para                emmc     /dev/block/platform/bootdevice/by-name/boot_para         flags=display=boot_para
+/dtbo1                    emmc     /dev/block/platform/bootdevice/by-name/dtbo1             flags=display=dtbo1
+/dtbo2                    emmc     /dev/block/platform/bootdevice/by-name/dtbo2             flags=display=dtbo2
+/dtbo                     emmc     /dev/block/platform/bootdevice/by-name/dtbo              flags=display=dtbo
+/vbmeta                   emmc     /dev/block/platform/bootdevice/by-name/vbmeta            flags=display=vbmeta
 FSTAB_EOF
 
-# Also create in recovery/root/system/etc/ for compatibility
-debug "Creating recovery.fstab in recovery directory..."
-cat > $DEVICE_PATH/recovery/root/system/etc/recovery.fstab << 'FSTAB_EOF'
-# mount point    fstype    device                                                flags
-/system          ext4      system                                                flags=display="System";logical;slotselect
-/system_ext      ext4      system_ext                                            flags=display="System_ext";logical;slotselect
-/vendor          ext4      vendor                                                flags=display="Vendor";logical;slotselect
-/product         ext4      product                                               flags=display="Product";logical;slotselect
-
-/metadata        ext4      /dev/block/platform/bootdevice/by-name/md_udc        flags=display="Metadata";backup=1
-/data            f2fs      /dev/block/platform/bootdevice/by-name/userdata      flags=fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized,keydirectory=/metadata/vold/metadata_encryption
-/boot            emmc      /dev/block/platform/bootdevice/by-name/boot          flags=display="Boot";backup=1;flashimg=1;slotselect
-/misc            emmc      /dev/block/platform/bootdevice/by-name/para          flags=display="Misc"
-FSTAB_EOF
-
-# Create twrp.flags
-debug "Creating twrp.flags..."
-cat > $DEVICE_PATH/recovery/root/system/etc/twrp.flags << 'FLAGS_EOF'
-# Main partitions
-/protect_f       ext4      /dev/block/platform/bootdevice/by-name/protect1      flags=display="Protect_f";backup=1
-/protect_s       ext4      /dev/block/platform/bootdevice/by-name/protect2      flags=display="Protect_s";backup=1
-/nvdata          ext4      /dev/block/platform/bootdevice/by-name/nvdata        flags=display="Nvdata";backup=1
-/nvcfg           ext4      /dev/block/platform/bootdevice/by-name/nvcfg         flags=display="Nvcfg";backup=1
-/persist         ext4      /dev/block/platform/bootdevice/by-name/persist       flags=display="Persist";backup=1
-/nvram           emmc      /dev/block/platform/bootdevice/by-name/nvram         flags=display="Nvram";backup=1
-
-# Boot partitions
-/lk              emmc      /dev/block/platform/bootdevice/by-name/bootloader    flags=display="Bootloader";backup=1
-/lk2             emmc      /dev/block/platform/bootdevice/by-name/bootloader2   flags=display="Bootloader2";backup=1
-/logo            emmc      /dev/block/platform/bootdevice/by-name/logo          flags=display="Logo";backup=1;slotselect
-/dtbo            emmc      /dev/block/platform/bootdevice/by-name/dtbo          flags=display="Dtbo";backup=1
-
-# Super partition
-/super           emmc      /dev/block/platform/bootdevice/by-name/super         flags=display="Super";backup=1;flashimg=1
-
-# External Storage
-/external_sd     auto      /dev/block/mmcblk1p1                                 flags=display="MicroSD Card";storage;wipeingui;removable
-/usb_otg         auto      /dev/block/sda1                                      flags=display="USB OTG";storage;wipeingui;removable
-FLAGS_EOF
-
-# Create init.recovery.mt6761.rc
-debug "Creating init.recovery.mt6761.rc..."
-cat > $DEVICE_PATH/recovery/root/init.recovery.mt6761.rc << 'INIT_EOF'
-import /init.recovery.trustonic.rc
-
-on init
-    export LD_LIBRARY_PATH /system/lib:/vendor/lib:/vendor/lib/hw:/system/lib/hw
-    
-    # Create mount directories
-    mkdir /system
-    mkdir /system_ext
-    mkdir /vendor
-    mkdir /product
-
-on post-fs
-    # Support A/B feature for EMMC boot region
-    symlink /dev/block/mmcblk0boot0 /dev/block/platform/bootdevice/by-name/preloader_a
-    symlink /dev/block/mmcblk0boot1 /dev/block/platform/bootdevice/by-name/preloader_b
-    symlink /dev/block/platform/bootdevice /dev/block/bootdevice
-
-on fs
-    install_keyring
-
-service mtk.plpath.utils.link /system/bin/mtk_plpath_utils
-    class main
-    user root
-    group root system
-    disabled
-    oneshot
-    seclabel u:r:recovery:s0
-
-on boot
-    start boot-hal-1-1
-    start health-hal-2-1
-INIT_EOF
+# Also create in /recovery/root/system/etc/ path jika ada yang butuh
+debug "Creating recovery directories if needed..."
+mkdir -p $WORK_DIR/recovery/root/system/etc
+cp $WORK_DIR/recovery.fstab $WORK_DIR/recovery/root/system/etc/recovery.fstab
 
 # Verify files exist
 debug "Verifying created files..."
-ls -la $DEVICE_PATH/recovery.fstab || error "recovery.fstab not created!"
-ls -la $DEVICE_PATH/recovery/root/system/etc/recovery.fstab || error "recovery/root/system/etc/recovery.fstab not created!"
+ls -la $WORK_DIR/recovery.fstab || error "recovery.fstab not created in root!"
+ls -la $DEVICE_PATH/recovery.fstab || echo "recovery.fstab exists in device tree"
 
 # Setup build environment
 debug "Setting up build environment..."
@@ -404,7 +190,20 @@ if [ -f "$OUTPUT_DIR/boot.img" ]; then
     echo "================================================"
     echo "Output: /tmp/cirrus-ci-build/output/boot.img"
     echo "================================================"
+    
+    # Show boot.img info
+    echo "Boot image info:"
+    ls -lh "$OUTPUT_DIR/boot.img"
+    file "$OUTPUT_DIR/boot.img"
 else
     error "Build failed! No boot.img found"
+    
+    # Debug info
+    echo "Checking output directory:"
+    ls -la $OUTPUT_DIR/ || echo "Output directory not found"
+    
+    echo "Last 100 lines of build log:"
+    tail -n 100 build.log || true
+    
     exit 1
 fi
