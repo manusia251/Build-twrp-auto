@@ -96,6 +96,11 @@ TARGET_BOOTLOADER_BOARD_NAME := mt6761
 BOARD_HAS_MTK_HARDWARE := true
 BOARD_USES_MTK_HARDWARE := true
 
+# Vendor configuration (TAMBAHKAN INI)
+TARGET_COPY_OUT_VENDOR := vendor
+TARGET_COPY_OUT_PRODUCT := product
+TARGET_COPY_OUT_SYSTEM_EXT := system_ext
+
 # Architecture - Fixed for 32-bit ARM
 TARGET_ARCH := arm
 TARGET_ARCH_VARIANT := armv8-a  # Build system requires this
