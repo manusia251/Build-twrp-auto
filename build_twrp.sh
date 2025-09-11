@@ -138,9 +138,7 @@ TW_INCLUDE_LIBRESETPROP := true
 
 # Fix boot loop issues
 TW_NO_LEGACY_PROPS := true
-TW_OVERRIDE_SYSTEM_PROPS := \
-    "ro.bootmode=recovery" \
-    "ro.build.fingerprint=Infinix/X6512-GL/Infinix-X6512:12/SP1A.210812.016/230620V793:user/release-keys"
+TW_OVERRIDE_SYSTEM_PROPS := "ro.bootmode=recovery;ro.build.fingerprint=Infinix/X6512-GL/Infinix-X6512:12/SP1A.210812.016/230620V793:user/release-keys"
 
 # Skip TWRP on normal boot
 TW_SKIP_ADDITIONAL_FSTAB := true
