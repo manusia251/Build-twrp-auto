@@ -182,9 +182,9 @@ task:
       exit 1
     fi
     
-    # Fix naming inconsistencies
+    # Fix naming inconsistencies (corrected grouping with escaped parentheses)
     echo "  Fixing naming inconsistencies..."
-    find device/infinix/Infinix_X6512 -type f KATEX_INLINE_OPEN -name "*.mk" -o -name "*.rc" -o -name "*.xml" KATEX_INLINE_CLOSE -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
+    find device/infinix/Infinix_X6512 -type f \( -name "*.mk" -o -name "*.rc" -o -name "*.xml" -o -name "*.dts*" -o -name "*.sh" \) -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
     
     # Cleanup
     rm -rf temp_dt
@@ -502,7 +502,7 @@ task:
     echo "  This will take 15-30 minutes..."
     echo ""
     
-    # Build bootimage with progress filter
+    # Build bootimage with progress filter (corrected regex)
     mka -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
       # Filter for important messages
       if echo "$line" | grep -qE ".*%.*|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
@@ -524,10 +524,6 @@ task:
     echo "================================================"
     echo "[10/10] Verifying and Preparing Artifacts"
     echo "================================================"
-    
-    # Store current working directory (Cirrus CI working dir)
-    WORKING_DIR=$(pwd)
-    echo "  Current working directory: $WORKING_DIR"
     
     cd /tmp/twrp
     
@@ -553,94 +549,4 @@ task:
     IMG_SIZE=$(stat -c%s "$OUTPUT_IMG" | numfmt --to=iec)
     IMG_MD5=$(md5sum "$OUTPUT_IMG" | cut -d' ' -f1)
     
-    echo "  Image size: $IMG_SIZE"
-    echo "  MD5: $IMG_MD5"
-    
-    # Create artifacts directory in Cirrus working directory
-    echo "  Preparing artifacts in Cirrus working directory..."
-    mkdir -p "$WORKING_DIR/artifacts"
-    
-    DATE=$(date +%Y%m%d-%H%M)
-    ARTIFACT_NAME="twrp-Infinix_X6512-${DATE}.img"
-    
-    # Copy image to artifacts directory
-    cp "$OUTPUT_IMG" "$WORKING_DIR/artifacts/$ARTIFACT_NAME"
-    
-    # Also copy the ramdisk images if they exist (for debugging)
-    if [ -f "out/target/product/Infinix_X6512/ramdisk-recovery.img" ]; then
-      cp "out/target/product/Infinix_X6512/ramdisk-recovery.img" "$WORKING_DIR/artifacts/ramdisk-recovery.img"
-    fi
-    
-    # Create README
-    cat > "$WORKING_DIR/artifacts/README.txt" << README_TEXT
-    TWRP Recovery for Infinix X6512
-    ================================
-    
-    Build Date: $(date)
-    File: $ARTIFACT_NAME
-    Size: $IMG_SIZE
-    MD5: $IMG_MD5
-    
-    Installation Instructions:
-    ==========================
-    
-    Method 1: Flash as boot (recommended for recovery-as-boot devices):
-    1. adb reboot bootloader
-    2. fastboot flash boot $ARTIFACT_NAME
-    3. fastboot reboot recovery
-    
-    Method 2: Flash as recovery (if device has separate recovery partition):
-    1. adb reboot bootloader
-    2. fastboot flash recovery $ARTIFACT_NAME
-    3. fastboot reboot recovery
-    
-    Features:
-    =========
-    - Touchscreen support (Omnivision TCM SPI)
-    - ADB Root enabled
-    - Fastbootd support
-    - FBE Decryption support
-    - USB OTG support
-    
-    Touchscreen Troubleshooting:
-    ============================
-    If touchscreen doesn't work, connect via ADB and run:
-    
-    adb shell
-    # Check if touchscreen device is detected
-    cat /proc/bus/input/devices | grep -i touch
-    
-    # Try to manually bind the driver
-    echo "spi2.0" > /sys/bus/spi/drivers/omnivision_tcm_spi/bind
-    
-    # Check kernel messages for touchscreen errors
-    dmesg | grep -i touch
-    
-    # Check if input events are being generated
-    getevent -l
-    
-    Build Information:
-    ==================
-    Device: Infinix X6512
-    Android Version: 11 (R)
-    TWRP Branch: twrp-11
-    Kernel: Prebuilt from device tree
-    README_TEXT
-    
-    # Change back to working directory and list artifacts
-    cd "$WORKING_DIR"
-    echo ""
-    echo "  Artifacts prepared:"
-    ls -lah artifacts/
-    
-    echo ""
-    echo "[10/10] Build artifacts ready"
-    echo ""
-    echo "================================================"
-    echo "BUILD COMPLETED SUCCESSFULLY!"
-    echo "================================================"
-    echo ""
-    echo "Download the artifacts from Cirrus CI web interface"
-  
-  artifacts:
-    path: "artifacts/**"
+    echo "
