@@ -182,6 +182,11 @@ task:
       exit 1
     fi
     
+    # Fix naming inconsistencies (replace hyphen with underscore in all relevant files)
+    echo "  Fixing naming inconsistencies (hyphen to underscore)..."
+    find device/infinix/Infinix_X6512 -type f \( -name "*.mk" -o -name "*.rc" -o -name "*.xml" -o -name "*.dts*" -o -name "*.sh" \) -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
+    echo "  Naming fixed"
+    
     # Cleanup
     rm -rf temp_dt
     
@@ -300,13 +305,18 @@ task:
     echo "  Creating recovery root structure..."
     mkdir -p recovery/root
     
-    # Create touchscreen init
-    echo "  Creating touchscreen initialization..."
+    # Create touchscreen init (enhanced based on driver analysis)
+    echo "  Creating enhanced touchscreen initialization..."
     cat > recovery/root/init.recovery.touchscreen.rc << 'TOUCH_END'
     on init
         # Create input directories
         mkdir /dev/input 0755 root root
-    
+
+    on early-init
+        # Load SPI drivers early
+        write /sys/bus/spi/drivers_probe omnivision_tcm_spi
+        write /sys/bus/spi/drivers_probe mtk_tpd
+
     on boot
         # Initialize Omnivision TCM SPI touchscreen
         write /sys/bus/spi/drivers/omnivision_tcm_spi/bind "spi2.0"
@@ -323,10 +333,13 @@ task:
         # MediaTek platform specific
         write /sys/devices/platform/11012000.spi2/spi_master/spi2/spi2.0/enable 1
         
-        # Enable ADB root
+        # Enable ADB root and debug
         setprop ro.adb.secure 0
         setprop ro.debuggable 1
         setprop service.adb.root 1
+
+        # Additional MTK TPD init
+        write /sys/devices/virtual/touchscreen/touchscreen0/calibration_type 0
     TOUCH_END
     
     # Update device.mk with init scripts
@@ -428,6 +441,14 @@ task:
       echo "    ✓ prebuilt/dtb.img"
     else
       echo "    ✗ Missing: prebuilt/dtb.img"
+      validation_errors=$((validation_errors + 1))
+    fi
+    
+    # Additional check: Verify init.rc file exists post-patches
+    if [ -f "recovery/root/init.recovery.touchscreen.rc" ]; then
+      echo "    ✓ recovery/root/init.recovery.touchscreen.rc"
+    else
+      echo "    ✗ Missing: recovery/root/init.recovery.touchscreen.rc"
       validation_errors=$((validation_errors + 1))
     fi
     
@@ -585,7 +606,7 @@ task:
     
     cp "$OUTPUT_IMG" "/tmp/artifacts/$ARTIFACT_NAME"
     
-    # Create README
+    # Create README (enhanced with touchscreen debug info)
     cat > /tmp/artifacts/README.txt << README_TEXT
     TWRP Recovery for Infinix X6512
     ================================
@@ -605,6 +626,13 @@ task:
     - ADB Root enabled
     - Fastbootd support
     - FBE Decryption support
+    
+    Touchscreen Debugging:
+    If touchscreen doesn't work, boot to recovery and run via ADB shell:
+    adb shell
+    echo "spi2.0" > /sys/bus/spi/drivers/omnivision_tcm_spi/bind
+    dmesg | grep -i touch
+    cat /proc/bus/input/devices | grep -i touch
     README_TEXT
     
     echo ""
