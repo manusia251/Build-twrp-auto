@@ -1,0 +1,135 @@
+container:
+  image: ubuntu:20.04
+  cpu: 8
+  memory: 16G
+
+env:
+  # Device config
+  DEVICE: Infinix-X6512
+  DEVICE_PATH: device/infinix/Infinix-X6512
+  
+  # TWRP Minimal Manifest
+  MANIFEST: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+  MANIFEST_BRANCH: twrp-11
+  
+  # Your device tree
+  DT_REPO: https://github.com/manusia251/twrp-test
+  DT_BRANCH: main
+  
+  # Build optimization
+  USE_CCACHE: 1
+  CCACHE_SIZE: 10G
+  ALLOW_MISSING_DEPENDENCIES: true
+  LC_ALL: C
+
+task:
+  name: TWRP Build - Infinix X6512
+  timeout_in: 60m
+  
+  install_script: |
+    echo "=== Installing minimal dependencies ==="
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+      bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+      git gnupg gperf lib32ncurses5-dev lib32z1-dev liblz4-tool \
+      libncurses5 libssl-dev libxml2 libxml2-utils lzop \
+      python python3 rsync unzip zip openjdk-8-jdk-headless \
+      ca-certificates wget file make
+    wget -q https://storage.googleapis.com/git-repo-downloads/repo -O /usr/bin/repo
+    chmod a+x /usr/bin/repo
+    ccache -M $CCACHE_SIZE
+    echo "=== Dependencies installed ==="
+  
+  sync_script: |
+    echo "=== Syncing minimal TWRP sources ==="
+    mkdir -p /tmp/twrp && cd /tmp/twrp
+    repo init --depth=1 -u $MANIFEST -b $MANIFEST_BRANCH -g default,-darwin,-mips,-x86 --no-repo-verify
+    repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags --current-branch --optimized-fetch
+    echo "=== Sync completed ==="
+  
+  device_tree_script: |
+    echo "=== Setting up device tree ==="
+    cd /tmp/twrp
+    git clone --depth=1 $DT_REPO -b $DT_BRANCH $DEVICE_PATH
+    
+    cd $DEVICE_PATH
+    for file in Android.mk AndroidProducts.mk BoardConfig.mk device.mk omni_${DEVICE}.mk recovery.fstab; do
+      [ -f "$file" ] && echo "✓ $file" || (echo "✗ Missing $file" && exit 1)
+    done
+    [ -f "prebuilt/kernel" ] && echo "✓ Kernel found" || (echo "✗ Missing kernel" && exit 1)
+    [ -f "prebuilt/dtb.img" ] && echo "✓ DTB found" || (echo "✗ Missing DTB" && exit 1)
+    
+    cat >> BoardConfig.mk << EOF
+    
+    # CI Optimizations
+    TW_INCLUDE_FASTBOOTD := true
+    TW_INCLUDE_RESETPROP := true
+    TW_INCLUDE_CRYPTO := true
+    TW_INCLUDE_CRYPTO_FBE := true
+    TW_INCLUDE_FBE_METADATA_DECRYPT := true
+    BOARD_USES_METADATA_PARTITION := true
+    TW_USE_NEW_MINADBD := true
+    TARGET_USES_LOGD := true
+    TWRP_INCLUDE_LOGCAT := true
+    TW_NO_SCREEN_BLANK := true
+    TW_DEFAULT_BRIGHTNESS := 120
+    EOF
+    
+    mkdir -p recovery/root
+    cat > recovery/root/init.recovery.touch.rc << EOF
+    on boot
+        write /sys/bus/spi/drivers/omnivision_tcm_spi/bind "spi2.0"
+        chmod 0660 /dev/input/event0
+        chmod 0660 /dev/input/event1
+        chmod 0660 /dev/input/event2
+        write /sys/class/omnivision_tcm/tcm0/enable 1
+        setprop ro.adb.secure 0
+        setprop service.adb.root 1
+    EOF
+    
+    echo "PRODUCT_COPY_FILES += \$(LOCAL_PATH)/recovery/root/init.recovery.touch.rc:root/init.recovery.touch.rc" >> device.mk
+    echo "=== Device tree ready ==="
+  
+  build_script: |
+    echo "=== Building TWRP ==="
+    cd /tmp/twrp
+    source build/envsetup.sh
+    lunch omni_${DEVICE}-eng || lunch twrp_${DEVICE}-eng
+    make -j$(nproc) recoveryimage
+    
+    if [ -f out/target/product/${DEVICE}/boot.img ]; then
+      echo "=== Build successful ==="
+      ls -lh out/target/product/${DEVICE}/boot.img
+      md5sum out/target/product/${DEVICE}/boot.img
+    else
+      echo "=== Build failed ==="
+      exit 1
+    fi
+  
+  artifacts_script: |
+    echo "=== Preparing artifacts ==="
+    cd /tmp/twrp
+    OUT=out/target/product/${DEVICE}
+    
+    if [ -f $OUT/boot.img ]; then
+      mkdir -p /tmp/artifacts
+      DATE=$(date +%Y%m%d-%H%M)
+      cp $OUT/boot.img /tmp/artifacts/twrp-${DEVICE}-${DATE}.img
+      
+      cat > /tmp/artifacts/info.txt << EOF
+    TWRP for Infinix X6512
+    Build Date: $(date)
+    MD5: $(md5sum $OUT/boot.img | cut -d' ' -f1)
+    Size: $(stat -c%s $OUT/boot.img | numfmt --to=iec)
+    
+    Flash: fastboot flash boot twrp-${DEVICE}-${DATE}.img
+    EOF
+      
+      echo "=== Artifacts ready ==="
+      ls -la /tmp/artifacts/
+    fi
+  
+  artifacts:
+    path: /tmp/artifacts/**
+    type: application/octet-stream
