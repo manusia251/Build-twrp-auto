@@ -2,209 +2,1114 @@ container:
   image: ubuntu:20.04
   cpu: 8
   memory: 16G
+  greedy: true
 
 env:
-  # Device config
+  # Device Configuration
   DEVICE: Infinix_X6512
   DEVICE_PATH: device/infinix/Infinix-X6512
+  DEVICE_MAKEFILE: twrp_Infinix_X6512
   
-  # TWRP Manifest
+  # Repository URLs
   MANIFEST: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
   MANIFEST_BRANCH: twrp-11
-  
-  # Device tree repo
   DT_REPO: https://github.com/manusia251/twrp-test
   DT_BRANCH: main
   
-  # Build config
+  # Build Configuration
   USE_CCACHE: 1
   CCACHE_SIZE: 10G
+  CCACHE_COMPRESS: 1
   ALLOW_MISSING_DEPENDENCIES: true
   LC_ALL: C
+  
+  # Debug Options
+  DEBUG_BUILD: true
+  VERBOSE: true
+  KEEP_GOING: true
 
 task:
-  name: TWRP Build - Infinix X6512
-  timeout_in: 60m
+  name: TWRP Build - Infinix X6512 MT6761
+  timeout_in: 90m
   
-  install_script: |
-    echo "=== Installing dependencies ==="
+  environment_setup_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "=================================="
+    echo "=== Environment Setup Starting ==="
+    echo "=================================="
+    
+    # Set timezone
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
+    export TZ=UTC
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+    
+    # System info
+    echo "=== System Information ==="
+    echo "CPU Cores: $(nproc)"
+    echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
+    echo "Disk Space: $(df -h / | tail -1 | awk '{print $4}')"
+    echo "Ubuntu Version: $(lsb_release -d 2>/dev/null | cut -f2 || cat /etc/os-release | grep VERSION= | cut -d'"' -f2)"
+    
+    # Create working directories
+    mkdir -p /tmp/twrp
+    mkdir -p /tmp/artifacts
+    mkdir -p /tmp/logs
+    mkdir -p /tmp/ccache
+    
+    # Set environment variables
+    export HOME=/root
+    export USER=root
+    export BUILD_USERNAME=cirrus
+    export BUILD_HOSTNAME=ci
+    export ANDROID_BUILD_TOP=/tmp/twrp
+    export OUT_DIR=/tmp/twrp/out
+    export OUT_DIR_COMMON_BASE=/tmp/out
+    export CCACHE_DIR=/tmp/ccache
+    
+    echo "=== Environment setup completed ==="
+  
+  install_dependencies_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================="
+    echo "=== Installing Build Dependencies ===="
+    echo "======================================="
+    
+    # Update package lists
+    apt-get update -qq || {
+      echo "ERROR: Failed to update package lists"
+      apt-get update --fix-missing
+    }
+    
+    # Essential build tools
+    echo "=== Installing essential tools ==="
     apt-get install -y -qq --no-install-recommends \
-      bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
-      git gnupg gperf lib32ncurses5-dev lib32z1-dev liblz4-tool \
-      libncurses5 libssl-dev libxml2 libxml2-utils lzop \
-      python python3 rsync unzip zip openjdk-8-jdk-headless \
-      ca-certificates wget file make openssh-client sed
-    wget -q https://storage.googleapis.com/git-repo-downloads/repo -O /usr/bin/repo
+      bc \
+      bison \
+      build-essential \
+      ccache \
+      curl \
+      flex \
+      g++-multilib \
+      gcc-multilib \
+      git \
+      gnupg \
+      gperf \
+      lib32ncurses5-dev \
+      lib32readline-dev \
+      lib32z1-dev \
+      libc6-dev-i386 \
+      libgl1-mesa-dev \
+      liblz4-tool \
+      libncurses5 \
+      libncurses5-dev \
+      libsdl1.2-dev \
+      libssl-dev \
+      libxml2 \
+      libxml2-utils \
+      lzop \
+      pngcrush \
+      rsync \
+      schedtool \
+      squashfs-tools \
+      xsltproc \
+      zip \
+      zlib1g-dev || {
+      echo "ERROR: Failed to install essential packages"
+      exit 1
+    }
+    
+    # Programming languages and tools
+    echo "=== Installing programming tools ==="
+    apt-get install -y -qq --no-install-recommends \
+      python \
+      python3 \
+      python3-pip \
+      openjdk-8-jdk-headless \
+      maven \
+      nodejs || {
+      echo "WARNING: Some programming tools failed to install"
+    }
+    
+    # Additional utilities
+    echo "=== Installing additional utilities ==="
+    apt-get install -y -qq --no-install-recommends \
+      ca-certificates \
+      wget \
+      file \
+      make \
+      openssh-client \
+      sed \
+      unzip \
+      vim \
+      nano \
+      tree \
+      dos2unix \
+      jq \
+      software-properties-common || {
+      echo "WARNING: Some utilities failed to install"
+    }
+    
+    # Install repo tool
+    echo "=== Installing repo tool ==="
+    wget -q https://storage.googleapis.com/git-repo-downloads/repo -O /usr/bin/repo || {
+      echo "ERROR: Failed to download repo tool"
+      curl -s https://storage.googleapis.com/git-repo-downloads/repo > /usr/bin/repo
+    }
     chmod a+x /usr/bin/repo
+    
+    # Setup ccache
+    echo "=== Configuring ccache ==="
     ccache -M $CCACHE_SIZE
+    ccache --set-config=compression=true
+    ccache --set-config=compression_level=6
+    ccache -z
+    ccache -s
+    
+    # Configure git
+    echo "=== Configuring git ==="
     git config --global user.email "ci@cirrus.com"
     git config --global user.name "Cirrus CI"
+    git config --global color.ui false
+    git config --global advice.detachedHead false
+    
+    # Verify installations
+    echo "=== Verifying installations ==="
+    which python3 && python3 --version
+    which java && java -version 2>&1 | head -1
+    which make && make --version | head -1
+    which gcc && gcc --version | head -1
+    which repo && echo "repo: installed"
+    which ccache && ccache --version | head -1
+    
+    echo "=== Dependencies installation completed ==="
   
-  sync_script: |
-    echo "=== Syncing TWRP sources ==="
-    mkdir -p /tmp/twrp && cd /tmp/twrp
-    repo init --depth=1 -u $MANIFEST -b $MANIFEST_BRANCH --no-repo-verify
-    repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags --optimized-fetch
-    echo "Sync completed"
-  
-  device_tree_script: |
-    echo "=== Setting up device tree ==="
+  sync_twrp_sources_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Syncing TWRP Sources          ==="
+    echo "======================================"
+    
     cd /tmp/twrp
     
-    # Clone repo
-    git clone --depth=1 $DT_REPO -b $DT_BRANCH temp_dt
+    # Initialize repo with retry mechanism
+    echo "=== Initializing repository ==="
+    for i in 1 2 3; do
+      echo "Attempt $i/3..."
+      if repo init --depth=1 -u $MANIFEST -b $MANIFEST_BRANCH --no-repo-verify --no-clone-bundle; then
+        echo "Repository initialized successfully"
+        break
+      else
+        echo "Failed attempt $i, retrying..."
+        sleep 5
+      fi
+    done
     
-    # Copy device tree to proper location
+    # Create local manifest for additional repos if needed
+    mkdir -p .repo/local_manifests
+    cat > .repo/local_manifests/twrp.xml << 'LOCAL_MANIFEST_EOF'
+    <?xml version="1.0" encoding="UTF-8"?>
+    <manifest>
+      <!-- Additional repos can be added here if needed -->
+    </manifest>
+    LOCAL_MANIFEST_EOF
+    
+    # Sync sources with retry and error handling
+    echo "=== Syncing sources ==="
+    sync_successful=false
+    for i in 1 2 3 4 5; do
+      echo "Sync attempt $i/5..."
+      if repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune --current-branch; then
+        sync_successful=true
+        echo "Source sync successful!"
+        break
+      else
+        echo "Sync failed, cleaning and retrying..."
+        repo sync -c -j4 --force-sync --force-broken || true
+        sleep 10
+      fi
+    done
+    
+    if [ "$sync_successful" = false ]; then
+      echo "ERROR: Failed to sync sources after 5 attempts"
+      exit 1
+    fi
+    
+    # Verify critical directories exist
+    echo "=== Verifying source tree ==="
+    critical_dirs="build/make build/soong bootable/recovery"
+    for dir in $critical_dirs; do
+      if [ -d "$dir" ]; then
+        echo "✓ $dir exists"
+      else
+        echo "✗ ERROR: $dir missing"
+        exit 1
+      fi
+    done
+    
+    echo "=== Source sync completed ==="
+  
+  setup_device_tree_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Setting Up Device Tree        ==="
+    echo "======================================"
+    
+    cd /tmp/twrp
+    
+    # Clone device tree
+    echo "=== Cloning device tree from $DT_REPO ==="
+    if [ -d temp_dt ]; then
+      rm -rf temp_dt
+    fi
+    
+    git clone --depth=1 $DT_REPO -b $DT_BRANCH temp_dt || {
+      echo "ERROR: Failed to clone device tree"
+      exit 1
+    }
+    
+    # Setup device tree in correct location
+    echo "=== Setting up device tree structure ==="
     mkdir -p device/infinix
+    if [ -d "device/infinix/Infinix-X6512" ]; then
+      rm -rf device/infinix/Infinix-X6512
+    fi
     cp -r temp_dt/Infinix-X6512 device/infinix/
     rm -rf temp_dt
     
     cd $DEVICE_PATH
     
-    echo "=== Fixing device tree files ==="
-    
-    # Remove vendorsetup.sh if exists
+    # Remove deprecated files
+    echo "=== Removing deprecated files ==="
     rm -f vendorsetup.sh
     
-    # Fix device.mk - comment out or remove PRODUCT_STATIC_BOOT_CONTROL_HAL
-    sed -i '/PRODUCT_STATIC_BOOT_CONTROL_HAL/,+4d' device.mk
+    # Fix device.mk - Remove obsolete PRODUCT_STATIC_BOOT_CONTROL_HAL
+    echo "=== Fixing device.mk ==="
+    if grep -q "PRODUCT_STATIC_BOOT_CONTROL_HAL" device.mk; then
+      echo "Removing PRODUCT_STATIC_BOOT_CONTROL_HAL..."
+      sed -i '/PRODUCT_STATIC_BOOT_CONTROL_HAL/,+4d' device.mk
+    fi
     
-    # Or safer approach - just comment it out
-    # sed -i 's/^PRODUCT_STATIC_BOOT_CONTROL_HAL/#PRODUCT_STATIC_BOOT_CONTROL_HAL/' device.mk
-    # sed -i '/^#PRODUCT_STATIC_BOOT_CONTROL_HAL/,+4 s/^/#/' device.mk
+    # Create proper twrp_Infinix_X6512.mk (not omni_)
+    echo "=== Creating twrp_${DEVICE}.mk ==="
+    cat > twrp_${DEVICE}.mk << 'DEVICE_MK_EOF'
+    #
+    # Copyright (C) 2025 The Android Open Source Project
+    # Copyright (C) 2025 TWRP Recovery Project
+    #
     
-    # Fix omni_Infinix_X6512.mk path reference
-    cat > omni_Infinix_X6512.mk << 'EOF'
+    # Release name
+    PRODUCT_RELEASE_NAME := Infinix_X6512
+    
     # Inherit from those products. Most specific first.
+    $(call inherit-product, $(SRC_TARGET_DIR)/product/core_minimal.mk)
     $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)
     
-    # Inherit some common Omni stuff.
-    $(call inherit-product, vendor/omni/config/common.mk)
+    # Inherit from TWRP-common stuff, if available
+    $(call inherit-product-if-exists, vendor/twrp/config/common.mk)
     
-    # Inherit from device (folder uses dash)
+    # Inherit from device
     $(call inherit-product, device/infinix/Infinix-X6512/device.mk)
     
+    # Device identifier
     PRODUCT_DEVICE := Infinix_X6512
-    PRODUCT_NAME := omni_Infinix_X6512
+    PRODUCT_NAME := twrp_Infinix_X6512
     PRODUCT_BRAND := Infinix
     PRODUCT_MODEL := Infinix X6512
     PRODUCT_MANUFACTURER := infinix
     
     PRODUCT_GMS_CLIENTID_BASE := android-infinix
     
+    # Build info
     PRODUCT_BUILD_PROP_OVERRIDES += \
-        PRIVATE_BUILD_DESC="vnd_x6512_h6126-user 11 RP1A.200720.011 545435 release-keys"
+        PRIVATE_BUILD_DESC="vnd_x6512_h6126-user 11 RP1A.200720.011 545435 release-keys" \
+        TARGET_DEVICE=Infinix_X6512 \
+        PRODUCT_NAME=X6512
     
     BUILD_FINGERPRINT := Infinix/X6512-OP/Infinix-X6512:11/RP1A.200720.011/240220V535:user/release-keys
-    EOF
+    DEVICE_MK_EOF
     
-    # Verify files exist
-    echo "=== Verifying files ==="
-    for file in Android.mk AndroidProducts.mk BoardConfig.mk device.mk omni_${DEVICE}.mk recovery.fstab; do
-      if [ -f "$file" ]; then
-        echo "✓ $file exists"
+    # Update AndroidProducts.mk for TWRP
+    echo "=== Updating AndroidProducts.mk ==="
+    cat > AndroidProducts.mk << 'PRODUCTS_MK_EOF'
+    #
+    # Copyright (C) 2025 TWRP Recovery Project
+    #
+    
+    PRODUCT_MAKEFILES := \
+        $(LOCAL_DIR)/twrp_Infinix_X6512.mk
+    
+    COMMON_LUNCH_CHOICES := \
+        twrp_Infinix_X6512-user \
+        twrp_Infinix_X6512-userdebug \
+        twrp_Infinix_X6512-eng
+    PRODUCTS_MK_EOF
+    
+    # Update Android.mk
+    echo "=== Updating Android.mk ==="
+    cat > Android.mk << 'ANDROID_MK_EOF'
+    #
+    # Copyright (C) 2025 TWRP Recovery Project
+    #
+    
+    LOCAL_PATH := $(call my-dir)
+    
+    ifeq ($(TARGET_DEVICE),Infinix_X6512)
+    include $(call all-subdir-makefiles,$(LOCAL_PATH))
+    endif
+    ANDROID_MK_EOF
+    
+    # Add more BoardConfig.mk configurations
+    echo "=== Enhancing BoardConfig.mk ==="
+    cat >> BoardConfig.mk << 'BOARDCONFIG_APPEND_EOF'
+    
+    # Additional TWRP configurations
+    TW_INCLUDE_FASTBOOTD := true
+    TW_INCLUDE_RESETPROP := true
+    TW_INCLUDE_REPACKTOOLS := true
+    TW_INCLUDE_CRYPTO := true
+    TW_INCLUDE_CRYPTO_FBE := true
+    TW_INCLUDE_FBE_METADATA_DECRYPT := true
+    BOARD_USES_METADATA_PARTITION := true
+    
+    # Debug flags
+    TARGET_USES_LOGD := true
+    TWRP_INCLUDE_LOGCAT := true
+    TARGET_RECOVERY_DEVICE_MODULES += debuggerd
+    TW_RECOVERY_ADDITIONAL_RELINK_FILES += $(TARGET_OUT_EXECUTABLES)/debuggerd
+    
+    # Display settings
+    TW_NO_SCREEN_BLANK := true
+    RECOVERY_SDCARD_ON_DATA := true
+    TW_DEFAULT_BRIGHTNESS := 120
+    TW_MAX_BRIGHTNESS := 255
+    TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
+    
+    # ADB settings
+    BOARD_HAS_NO_REAL_SDCARD := true
+    TW_EXCLUDE_DEFAULT_USB_INIT := true
+    TW_USE_NEW_MINADBD := true
+    
+    # A/B specific
+    AB_OTA_UPDATER := true
+    TW_INCLUDE_LIBRESETPROP := true
+    TW_HAS_NO_RECOVERY_PARTITION := true
+    TW_USE_RECOVERY_AS_BOOT := true
+    BOARDCONFIG_APPEND_EOF
+    
+    echo "=== Device tree structure completed ==="
+  
+  validate_device_tree_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Validating Device Tree        ==="
+    echo "======================================"
+    
+    cd /tmp/twrp/$DEVICE_PATH
+    
+    # Function to check file existence
+    check_file() {
+      if [ -f "$1" ]; then
+        echo "✓ $1 exists ($(stat -c%s $1) bytes)"
+        return 0
       else
-        echo "✗ Missing $file"
-        exit 1
+        echo "✗ ERROR: $1 missing"
+        return 1
+      fi
+    }
+    
+    # Validate required files
+    echo "=== Checking required files ==="
+    error_count=0
+    
+    check_file "Android.mk" || ((error_count++))
+    check_file "AndroidProducts.mk" || ((error_count++))
+    check_file "BoardConfig.mk" || ((error_count++))
+    check_file "device.mk" || ((error_count++))
+    check_file "twrp_${DEVICE}.mk" || ((error_count++))
+    check_file "recovery.fstab" || ((error_count++))
+    check_file "prebuilt/kernel" || ((error_count++))
+    check_file "prebuilt/dtb.img" || ((error_count++))
+    
+    if [ $error_count -gt 0 ]; then
+      echo "ERROR: $error_count required files missing"
+      exit 1
+    fi
+    
+    # Validate file contents
+    echo "=== Validating file contents ==="
+    
+    # Check AndroidProducts.mk contains correct product
+    if grep -q "twrp_${DEVICE}" AndroidProducts.mk; then
+      echo "✓ AndroidProducts.mk contains twrp_${DEVICE}"
+    else
+      echo "✗ ERROR: AndroidProducts.mk missing twrp_${DEVICE} reference"
+      exit 1
+    fi
+    
+    # Check BoardConfig.mk has essential configs
+    essential_configs="TARGET_ARCH TARGET_CPU_ABI BOARD_KERNEL_BASE"
+    for config in $essential_configs; do
+      if grep -q "^${config}" BoardConfig.mk; then
+        echo "✓ BoardConfig.mk contains $config"
+      else
+        echo "✗ WARNING: BoardConfig.mk missing $config"
       fi
     done
     
-    # Check prebuilt files
-    if [ -f "prebuilt/kernel" ] && [ -f "prebuilt/dtb.img" ]; then
-      echo "✓ Prebuilt kernel and dtb found"
-    else
-      echo "✗ Missing prebuilt files"
-      exit 1
-    fi
+    # Check for DOS line endings and fix
+    echo "=== Checking for DOS line endings ==="
+    for file in *.mk *.fstab; do
+      if file "$file" | grep -q "CRLF"; then
+        echo "Converting $file from DOS to Unix format..."
+        dos2unix "$file" 2>/dev/null || sed -i 's/\r$//' "$file"
+      fi
+    done
     
-    # Add touchscreen init
-    mkdir -p recovery/root
-    cat > recovery/root/init.recovery.touch.rc << 'TOUCH_EOF'
+    # List device tree structure
+    echo "=== Device tree structure ==="
+    tree -L 3 . || ls -la
+    
+    echo "=== Validation completed successfully ==="
+  
+  add_recovery_patches_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Adding Recovery Patches       ==="
+    echo "======================================"
+    
+    cd /tmp/twrp/$DEVICE_PATH
+    
+    # Create recovery root directory structure
+    echo "=== Creating recovery root structure ==="
+    mkdir -p recovery/root/{sbin,system/bin,vendor/lib/modules}
+    
+    # Create comprehensive init.recovery.touchscreen.rc
+    echo "=== Creating touchscreen init script ==="
+    cat > recovery/root/init.recovery.touchscreen.rc << 'TOUCH_INIT_EOF'
+    # Touchscreen initialization for Infinix X6512
+    # Omnivision TCM SPI driver
+    
+    on early-init
+        # Mount necessary filesystems
+        mount debugfs debugfs /sys/kernel/debug mode=0755
+        mount tracefs tracefs /sys/kernel/tracing
+        
+        # Enable kernel logging
+        write /proc/sys/kernel/printk "8 8 8 8"
+        write /proc/sys/kernel/dmesg_restrict 0
+        
+    on init
+        # Create required directories
+        mkdir /dev/input 0755 root root
+        mkdir /sys/class/input 0755 root root
+        
+        # Set up logging
+        setprop persist.debug.trace 1
+        setprop debug.atrace.tags.enableflags 0xffffffff
+        setprop ro.debuggable 1
+        
+    on fs
+        # Wait for sysfs
+        wait /sys/class/input 5
+        wait /sys/bus/spi/devices 5
+        wait /sys/devices/platform/11012000.spi2 5
+        
     on boot
+        # Load touchscreen driver (Omnivision TCM SPI)
         write /sys/bus/spi/drivers/omnivision_tcm_spi/bind "spi2.0"
+        
+        # Alternative binding methods
+        write /sys/bus/spi/drivers_probe "omnivision_tcm_spi"
+        write /sys/devices/platform/11012000.spi2/driver_override "omnivision_tcm_spi"
+        
+        # Set input device permissions
         chmod 0660 /dev/input/event0
         chmod 0660 /dev/input/event1
         chmod 0660 /dev/input/event2
+        chmod 0660 /dev/input/event3
+        chmod 0660 /dev/input/mice
+        chown system input /dev/input/event0
+        chown system input /dev/input/event1
+        chown system input /dev/input/event2
+        chown system input /dev/input/event3
+        
+        # Enable touchscreen controller
         write /sys/class/omnivision_tcm/tcm0/enable 1
+        write /sys/class/omnivision_tcm/tcm0/wake_gesture 0
+        write /sys/class/omnivision_tcm/tcm0/report_rate 120
+        
+        # MediaTek platform specific settings
+        write /sys/devices/platform/11012000.spi2/spi_master/spi2/spi2.0/enable 1
+        write /sys/devices/platform/11012000.spi2/spi_master/spi2/spi2.0/wake_gesture 0
+        
+        # MTK Touch Panel Driver settings
+        write /proc/tpd_em_log 1
+        write /proc/tpd_debug 1
+        
+        # Enable ADB with root access
         setprop ro.adb.secure 0
+        setprop ro.secure 0
+        setprop persist.sys.usb.config adb
+        setprop persist.service.adb.enable 1
+        setprop persist.service.debuggable 1
         setprop service.adb.root 1
-    TOUCH_EOF
+        
+        # Start essential services
+        start adbd
+        start logd
+        
+    on property:sys.usb.config=adb
+        write /sys/class/android_usb/android0/enable 0
+        write /sys/class/android_usb/android0/idVendor 18D1
+        write /sys/class/android_usb/android0/idProduct 4EE7
+        write /sys/class/android_usb/android0/functions adb
+        write /sys/class/android_usb/android0/enable 1
+        start adbd
+        
+    on property:sys.usb.config=mtp,adb
+        start adbd
+        
+    # Service for touchscreen debugging
+    service touch_debug /system/bin/sh -c "while true; do echo '=== Input Devices ==='; cat /proc/bus/input/devices; echo '=== Touch Events ==='; getevent -l | grep -E 'ABS_MT|BTN_TOUCH' | head -20; sleep 5; done"
+        user root
+        group root
+        disabled
+        oneshot
+        
+    on property:debug.touch=1
+        start touch_debug
+    TOUCH_INIT_EOF
     
-    # Add to device.mk if not already there
-    if ! grep -q "init.recovery.touch.rc" device.mk; then
-      echo "" >> device.mk
-      echo "PRODUCT_COPY_FILES += \$(LOCAL_PATH)/recovery/root/init.recovery.touch.rc:root/init.recovery.touch.rc" >> device.mk
-    fi
+    # Create USB init script
+    echo "=== Creating USB init script ==="
+    cat > recovery/root/init.recovery.usb.rc << 'USB_INIT_EOF'
+    on init
+        mount configfs none /config
+        mkdir /config/usb_gadget/g1 0770 shell shell
+        write /config/usb_gadget/g1/idVendor 0x18d1
+        write /config/usb_gadget/g1/idProduct 0xd001
+        mkdir /config/usb_gadget/g1/strings/0x409 0770
+        write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+        write /config/usb_gadget/g1/strings/0x409/manufacturer ${ro.product.manufacturer}
+        write /config/usb_gadget/g1/strings/0x409/product ${ro.product.model}
+        mkdir /config/usb_gadget/g1/configs/b.1 0777 shell shell
+        mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770 shell shell
+        write /config/usb_gadget/g1/os_desc/b_vendor_code 0x1
+        write /config/usb_gadget/g1/os_desc/qw_sign "MSFT100"
+        write /config/usb_gadget/g1/configs/b.1/MaxPower 500
+        mkdir /config/usb_gadget/g1/functions/ffs.adb
+        
+    on boot
+        setprop sys.usb.config adb
+    USB_INIT_EOF
     
-    echo "=== device.mk content after fix ==="
-    cat device.mk
+    # Update device.mk to include all init scripts
+    echo "=== Updating device.mk with init scripts ==="
+    cat >> device.mk << 'DEVICE_MK_APPEND_EOF'
     
-    echo "Device tree ready"
+    # Recovery init scripts
+    PRODUCT_COPY_FILES += \
+        $(LOCAL_PATH)/recovery/root/init.recovery.touchscreen.rc:root/init.recovery.touchscreen.rc \
+        $(LOCAL_PATH)/recovery/root/init.recovery.usb.rc:root/init.recovery.usb.rc \
+        $(LOCAL_PATH)/recovery/root/init.recovery.mt6761.rc:root/init.recovery.mt6761.rc
+    
+    # Additional properties
+    PRODUCT_PROPERTY_OVERRIDES += \
+        ro.adb.secure=0 \
+        ro.secure=0 \
+        ro.debuggable=1 \
+        persist.service.adb.enable=1 \
+        persist.service.debuggable=1 \
+        persist.sys.usb.config=adb \
+        sys.usb.config=adb \
+        sys.usb.controller=musb-hdrc
+    DEVICE_MK_APPEND_EOF
+    
+    echo "=== Recovery patches completed ==="
   
-  build_script: |
-    echo "=== Building TWRP ==="
+  build_twrp_recovery_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Building TWRP Recovery        ==="
+    echo "======================================"
+    
     cd /tmp/twrp
+    
+    # Setup build environment
+    echo "=== Setting up build environment ==="
+    export ALLOW_MISSING_DEPENDENCIES=true
+    export LC_ALL=C
+    export BUILD_USERNAME=cirrus
+    export BUILD_HOSTNAME=ci
+    export WITH_TWRP=true
+    
+    # Source build environment
+    echo "=== Sourcing build environment ==="
     source build/envsetup.sh
     
-    # Use lunch directly
-    lunch omni_${DEVICE}-eng
+    # Try different lunch combinations
+    echo "=== Selecting build target ==="
+    lunch_successful=false
     
-    echo "Building recovery..."
-    make -j$(nproc) recoveryimage
+    for lunch_target in "twrp_${DEVICE}-eng" "omni_${DEVICE}-eng" "aosp_${DEVICE}-eng"; do
+      echo "Trying: $lunch_target"
+      if lunch $lunch_target; then
+        lunch_successful=true
+        echo "Successfully selected: $lunch_target"
+        break
+      else
+        echo "Failed: $lunch_target, trying next..."
+      fi
+    done
     
-    # Check output
-    OUTPUT_IMG=""
-    if [ -f out/target/product/${DEVICE}/boot.img ]; then
-      OUTPUT_IMG="out/target/product/${DEVICE}/boot.img"
-      echo "✓ boot.img found"
-    elif [ -f out/target/product/${DEVICE}/recovery.img ]; then
-      OUTPUT_IMG="out/target/product/${DEVICE}/recovery.img"
-      echo "✓ recovery.img found"
-    else
-      echo "✗ No output image found"
-      ls -la out/target/product/${DEVICE}/
+    if [ "$lunch_successful" = false ]; then
+      echo "ERROR: Could not select build target"
+      echo "Available lunch choices:"
+      lunch
       exit 1
     fi
     
-    ls -lh $OUTPUT_IMG
-    md5sum $OUTPUT_IMG
-  
-  prepare_artifacts_script: |
-    echo "=== Preparing artifacts ==="
-    cd /tmp/twrp
-    mkdir -p /tmp/artifacts
+    # Display build configuration
+    echo "=== Build Configuration ==="
+    echo "TARGET_PRODUCT=$TARGET_PRODUCT"
+    echo "TARGET_DEVICE=$TARGET_DEVICE"
+    echo "TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT"
+    echo "TARGET_BUILD_TYPE=$TARGET_BUILD_TYPE"
+    echo "TARGET_ARCH=$TARGET_ARCH"
+    echo "OUT=$OUT"
+    echo "================================"
     
-    DATE=$(date +%Y%m%d-%H%M)
+    # Clean previous builds
+    echo "=== Cleaning previous builds ==="
+    make clean || true
     
-    if [ -f out/target/product/${DEVICE}/boot.img ]; then
-      cp out/target/product/${DEVICE}/boot.img /tmp/artifacts/twrp-${DEVICE}-${DATE}.img
-      echo "boot.img copied to artifacts"
-    elif [ -f out/target/product/${DEVICE}/recovery.img ]; then
-      cp out/target/product/${DEVICE}/recovery.img /tmp/artifacts/twrp-${DEVICE}-${DATE}-recovery.img
-      echo "recovery.img copied to artifacts"
+    # Start building with multiple fallback options
+    echo "=== Starting build process ==="
+    build_successful=false
+    
+    # Try building recoveryimage first (for TWRP)
+    echo "Attempting to build recoveryimage..."
+    if make -j$(nproc) recoveryimage 2>&1 | tee build.log; then
+      build_successful=true
+      echo "recoveryimage build successful!"
+    else
+      echo "recoveryimage failed, trying bootimage..."
+      if make -j$(nproc) bootimage 2>&1 | tee build.log; then
+        build_successful=true
+        echo "bootimage build successful!"
+      else
+        echo "bootimage failed, trying with fewer jobs..."
+        if make -j4 recoveryimage 2>&1 | tee -a build.log; then
+          build_successful=true
+          echo "recoveryimage build successful with -j4!"
+        fi
+      fi
     fi
     
-    # Create info file
-    cat > /tmp/artifacts/README.txt << 'INFO_EOF'
-    TWRP for Infinix X6512
-    Build Date: $(date)
+    if [ "$build_successful" = false ]; then
+      echo "=== Build failed, checking errors ==="
+      echo "Last 100 lines of build log:"
+      tail -n 100 build.log
+      
+      # Try to identify common errors
+      if grep -q "ninja: error" build.log; then
+        echo "ERROR: Ninja build error detected"
+      fi
+      if grep -q "FAILED:" build.log; then
+        echo "ERROR: Build step failed:"
+        grep "FAILED:" build.log | head -10
+      fi
+      if grep -q "error:" build.log; then
+        echo "ERROR: Compilation errors:"
+        grep "error:" build.log | head -10
+      fi
+      
+      exit 1
+    fi
     
-    Flash Instructions:
-    1. adb reboot bootloader
-    2. fastboot flash boot twrp-*.img
-    3. fastboot reboot recovery
+    echo "=== Build completed successfully ==="
+  
+  verify_build_output_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Verifying Build Output        ==="
+    echo "======================================"
+    
+    cd /tmp/twrp
+    
+    # Possible output locations
+    OUTPUT_PATHS=(
+      "out/target/product/${DEVICE}/boot.img"
+      "out/target/product/${DEVICE}/recovery.img"
+      "out/target/product/Infinix-X6512/boot.img"
+      "out/target/product/Infinix-X6512/recovery.img"
+      "out/target/product/Infinix_X6512/boot.img"
+      "out/target/product/Infinix_X6512/recovery.img"
+    )
+    
+    # Find the output image
+    OUTPUT_IMG=""
+    for path in "${OUTPUT_PATHS[@]}"; do
+      if [ -f "$path" ]; then
+        OUTPUT_IMG="$path"
+        echo "✓ Found output image: $path"
+        break
+      fi
+    done
+    
+    if [ -z "$OUTPUT_IMG" ]; then
+      echo "✗ ERROR: No output image found!"
+      echo "Checking all possible locations:"
+      for path in "${OUTPUT_PATHS[@]}"; do
+        echo "  $path: $([ -f "$path" ] && echo "EXISTS" || echo "NOT FOUND")"
+      done
+      
+      echo "Listing out directory contents:"
+      ls -la out/target/product/ 2>/dev/null || echo "No product directory"
+      
+      exit 1
+    fi
+    
+    # Validate image
+    echo "=== Validating $OUTPUT_IMG ==="
+    
+    # Check file size
+    file_size=$(stat -c%s "$OUTPUT_IMG")
+    file_size_mb=$((file_size / 1024 / 1024))
+    echo "Image size: ${file_size_mb}MB ($file_size bytes)"
+    
+    if [ $file_size -lt 10485760 ]; then
+      echo "WARNING: Image seems too small (< 10MB)"
+    elif [ $file_size -gt 67108864 ]; then
+      echo "WARNING: Image seems too large (> 64MB)"
+    else
+      echo "✓ Image size looks reasonable"
+    fi
+    
+    # Check file type
+    file_type=$(file "$OUTPUT_IMG")
+    echo "File type: $file_type"
+    
+    if echo "$file_type" | grep -q "Android bootimg"; then
+      echo "✓ Valid Android boot image detected"
+    elif echo "$file_type" | grep -q "data"; then
+      echo "✓ Binary data detected (likely valid)"
+    else
+      echo "WARNING: Unexpected file type"
+    fi
+    
+    # Calculate checksums
+    echo "=== Calculating checksums ==="
+    md5_hash=$(md5sum "$OUTPUT_IMG" | cut -d' ' -f1)
+    sha256_hash=$(sha256sum "$OUTPUT_IMG" | cut -d' ' -f1)
+    echo "MD5: $md5_hash"
+    echo "SHA256: $sha256_hash"
+    
+    # Try to unpack image for validation
+    echo "=== Attempting to unpack image ==="
+    if command -v unpackbootimg &> /dev/null; then
+      mkdir -p /tmp/boot_unpack
+      if unpackbootimg -i "$OUTPUT_IMG" -o /tmp/boot_unpack 2>/dev/null; then
+        echo "✓ Successfully unpacked boot image"
+        ls -la /tmp/boot_unpack/
+      else
+        echo "Could not unpack image (might be encrypted or different format)"
+      fi
+    fi
+    
+    # Save output path for artifacts
+    echo "$OUTPUT_IMG" > /tmp/output_image_path
+    
+    echo "=== Verification completed ==="
+  
+  prepare_artifacts_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "======================================"
+    echo "=== Preparing Artifacts           ==="
+    echo "======================================"
+    
+    cd /tmp/twrp
+    
+    # Read output image path
+    if [ -f /tmp/output_image_path ]; then
+      OUTPUT_IMG=$(cat /tmp/output_image_path)
+    else
+      echo "ERROR: No output image path saved"
+      exit 1
+    fi
+    
+    if [ ! -f "$OUTPUT_IMG" ]; then
+      echo "ERROR: Output image not found: $OUTPUT_IMG"
+      exit 1
+    fi
+    
+    # Create artifacts directory
+    mkdir -p /tmp/artifacts
+    
+    # Generate filename with timestamp
+    DATE=$(date +%Y%m%d-%H%M%S)
+    ARTIFACT_NAME="twrp-${DEVICE}-${DATE}.img"
+    
+    # Copy image to artifacts
+    echo "Copying $OUTPUT_IMG to /tmp/artifacts/$ARTIFACT_NAME"
+    cp "$OUTPUT_IMG" "/tmp/artifacts/$ARTIFACT_NAME"
+    
+    # Create comprehensive README
+    echo "=== Creating README ==="
+    cat > /tmp/artifacts/README.txt << README_EOF
+    =====================================
+    TWRP Recovery for Infinix X6512
+    =====================================
+    
+    Device Information:
+    -------------------
+    Model: Infinix X6512
+    Codename: ${DEVICE}
+    Architecture: ARM 32-bit (armv7-a)
+    Processor: MediaTek MT6761 (Helio A22)
+    Android Version: 11
+    Partition Type: A/B (recovery as boot)
+    
+    Build Information:
+    ------------------
+    Build Date: $(date)
+    Build Host: Cirrus CI
+    TWRP Branch: ${MANIFEST_BRANCH}
+    File: ${ARTIFACT_NAME}
+    Size: $(stat -c%s "/tmp/artifacts/$ARTIFACT_NAME" | numfmt --to=iec)
+    MD5: $(md5sum "/tmp/artifacts/$ARTIFACT_NAME" | cut -d' ' -f1)
+    SHA256: $(sha256sum "/tmp/artifacts/$ARTIFACT_NAME" | cut -d' ' -f1)
     
     Features:
-    - Touchscreen support (Omnivision TCM SPI)
-    - ADB Root enabled
-    - Fastbootd support
-    - Magisk support
-    - FBE Decryption support
-    INFO_EOF
+    ---------
+    ✓ Touchscreen support (Omnivision TCM SPI driver)
+    ✓ ADB Root access enabled
+    ✓ Fastbootd support for super partition
+    ✓ Magisk installation support
+    ✓ FBE (File-Based Encryption) decryption support
+    ✓ A/B partition support
+    ✓ Dynamic partition support
     
-    ls -la /tmp/artifacts/
+    Installation Instructions:
+    --------------------------
+    1. Enable Developer Options and USB Debugging on your device
+    2. Connect device to PC
+    3. Reboot to bootloader:
+       adb reboot bootloader
+    4. Flash TWRP:
+       fastboot flash boot ${ARTIFACT_NAME}
+    5. Reboot to recovery:
+       fastboot reboot recovery
+       OR
+       Hold Power + Volume Up while booting
+    
+    First Boot Instructions:
+    ------------------------
+    1. If touchscreen doesn't work immediately:
+       - Wait 10-15 seconds for driver initialization
+       - Try pressing power button to wake screen
+       - Use 'adb shell' to check touch driver status
+    
+    2. To verify touchscreen driver:
+       adb shell dmesg | grep -i touch
+       adb shell cat /proc/bus/input/devices
+    
+    3. Enable ADB if not working:
+       - Go to TWRP Settings
+       - Enable "ADB Debugging"
+    
+    Troubleshooting:
+    ----------------
+    • No touch response:
+      - Connect USB OTG mouse as temporary solution
+      - Check driver: adb shell ls /sys/bus/spi/drivers/
+      - Manual probe: adb shell "echo spi2.0 > /sys/bus/spi/drivers/omnivision_tcm_spi/bind"
+    
+    • Device not detected in fastboot:
+      - Install proper USB drivers
+      - Try different USB port/cable
+      - Run fastboot with sudo/admin privileges
+    
+    • Boot loop after flashing:
+      - Flash stock boot.img to recover
+      - Ensure you're using correct TWRP for your device model
+    
+    • Decryption not working:
+      - Format Data partition (will erase all data)
+      - Flash disable-dm-verity.zip if available
+    
+    Important Notes:
+    ----------------
+    • This is an A/B device - recovery is part of boot partition
+    • Always backup stock boot.img before flashing
+    • First boot may take longer while TWRP sets up
+    • Some features may require additional setup
+    
+    Support:
+    --------
+    GitHub: ${DT_REPO}
+    
+    =====================================
+    README_EOF
+    
+    # Create flashing script
+    echo "=== Creating flash script ==="
+    cat > /tmp/artifacts/flash_twrp.sh << 'FLASH_SCRIPT_EOF'
+    #!/bin/bash
+    echo "TWRP Flasher for Infinix X6512"
+    echo "==============================="
+    
+    # Check for image file
+    IMG_FILE=$(ls twrp-*.img 2>/dev/null | head -1)
+    if [ -z "$IMG_FILE" ]; then
+      echo "ERROR: No TWRP image found in current directory"
+      exit 1
+    fi
+    
+    echo "Found: $IMG_FILE"
+    echo ""
+    echo "Checking device connection..."
+    
+    if ! command -v adb &> /dev/null; then
+      echo "ERROR: ADB not found. Please install Android SDK Platform Tools"
+      exit 1
+    fi
+    
+    if ! command -v fastboot &> /dev/null; then
+      echo "ERROR: Fastboot not found. Please install Android SDK Platform Tools"
+      exit 1
+    fi
+    
+    # Check device
+    if adb devices | grep -q "device$"; then
+      echo "Device found in ADB mode"
+      echo "Rebooting to bootloader..."
+      adb reboot bootloader
+      sleep 5
+    fi
+    
+    # Wait for fastboot
+    echo "Waiting for device in fastboot mode..."
+    fastboot wait-for-device
+    
+    echo "Device found in fastboot mode"
+    fastboot devices
+    
+    echo ""
+    echo "Flashing TWRP..."
+    fastboot flash boot "$IMG_FILE"
+    
+    if [ $? -eq 0 ]; then
+      echo ""
+      echo "Flash successful!"
+      echo "Rebooting to recovery..."
+      fastboot reboot recovery
+      echo ""
+      echo "Your device should now boot into TWRP recovery"
+    else
+      echo ""
+      echo "Flash failed! Please check connection and try again"
+      exit 1
+    fi
+    FLASH_SCRIPT_EOF
+    
+    chmod +x /tmp/artifacts/flash_twrp.sh
+    
+    # Create Windows batch script
+    echo "=== Creating Windows flash script ==="
+    cat > /tmp/artifacts/flash_twrp.bat << 'BATCH_SCRIPT_EOF'
+    @echo off
+    title TWRP Flasher for Infinix X6512
+    echo TWRP Flasher for Infinix X6512
+    echo ===============================
+    echo.
+    
+    :: Find TWRP image
+    for %%f in (twrp-*.img) do set IMG_FILE=%%f
+    
+    if "%IMG_FILE%"=="" (
+      echo ERROR: No TWRP image found in current directory
+      pause
+      exit /b 1
+    )
+    
+    echo Found: %IMG_FILE%
+    echo.
+    echo Checking device connection...
+    
+    :: Check for ADB
+    where adb >nul 2>&1
+    if %errorlevel% neq 0 (
+      echo ERROR: ADB not found. Please install Android SDK Platform Tools
+      pause
+      exit /b 1
+    )
+    
+    :: Check device
+    adb devices | findstr "device$" >nul
+    if %errorlevel% equ 0 (
+      echo Device found in ADB mode
+      echo Rebooting to bootloader...
+      adb reboot bootloader
+      timeout /t 5 >nul
+    )
+    
+    :: Wait for fastboot
+    echo Waiting for device in fastboot mode...
+    fastboot wait-for-device
+    
+    echo Device found in fastboot mode
+    fastboot devices
+    echo.
+    
+    echo Flashing TWRP...
+    fastboot flash boot %IMG_FILE%
+    
+    if %errorlevel% equ 0 (
+      echo.
+      echo Flash successful!
+      echo Rebooting to recovery...
+      fastboot reboot recovery
+      echo.
+      echo Your device should now boot into TWRP recovery
+    ) else (
+      echo.
+      echo Flash failed! Please check connection and try again
+    )
+    
+    pause
+    BATCH_SCRIPT_EOF
+    
+    # Copy build log if exists
+    if [ -f build.log ]; then
+      echo "Copying build log..."
+      tail -n 5000 build.log > /tmp/artifacts/build_last_5000_lines.log
+    fi
+    
+    # List artifacts
+    echo "=== Artifacts prepared ==="
+    ls -lah /tmp/artifacts/
+    
+    echo "=== Build completed successfully! ==="
   
   artifacts:
-    path: "/tmp/artifacts/*"
+    path: "/tmp/artifacts/**"
+    type: application/octet-stream
