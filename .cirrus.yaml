@@ -597,19 +597,21 @@ task:
     echo "  Image size: $IMG_SIZE"
     echo "  MD5: $IMG_MD5"
     
-    # Prepare artifacts inside working dir (relative to /tmp/cirrus-ci-build)
-    echo "  Preparing artifacts..."
-    mkdir -p ../artifacts  # Relative to /tmp/twrp, creates /tmp/cirrus-ci-build/artifacts
+    # Prepare artifacts in working dir root (relative, non-tmp for reliable download)
+    echo "  Preparing artifacts in working dir..."
+    cd ..  # Go to /tmp/cirrus-ci-build
+    mkdir -p artifacts  # Creates ./artifacts relative to working dir
     
     DATE=$(date +%Y%m%d-%H%M)
     ARTIFACT_NAME="twrp-Infinix_X6512-${DATE}.img"
     
-    cp "$OUTPUT_IMG" "../artifacts/$ARTIFACT_NAME"
+    # Copy from twrp dir (now ../tmp/twrp/out/...)
+    cp "tmp/twrp/$OUTPUT_IMG" "artifacts/$ARTIFACT_NAME"
     
     # Create README
-    cat > ../artifacts/README.txt << README_TEXT
-    TWRP Recovery for Infinix X6512
-    ================================
+    cat > artifacts/README.txt << README_TEXT
+    TWRP Recovery for Infinix X6512 (boot.img)
+    ==========================================
     
     Build Date: $(date)
     File: $ARTIFACT_NAME
@@ -634,6 +636,10 @@ task:
     dmesg | grep -i touch
     cat /proc/bus/input/devices | grep -i touch
     README_TEXT
+    
+    # Debug: List artifacts
+    echo "  Artifacts prepared:"
+    ls -la artifacts/
     
     echo ""
     echo "[10/10] Build artifacts ready"
