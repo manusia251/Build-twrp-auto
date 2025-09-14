@@ -4,7 +4,7 @@ container:
   memory: 16G
 
 env:
-  # Device config (underscore for device name, dash for folder)
+  # Device config
   DEVICE: Infinix_X6512
   DEVICE_PATH: device/infinix/Infinix-X6512
   
@@ -35,7 +35,7 @@ task:
       git gnupg gperf lib32ncurses5-dev lib32z1-dev liblz4-tool \
       libncurses5 libssl-dev libxml2 libxml2-utils lzop \
       python python3 rsync unzip zip openjdk-8-jdk-headless \
-      ca-certificates wget file make openssh-client
+      ca-certificates wget file make openssh-client sed
     wget -q https://storage.googleapis.com/git-repo-downloads/repo -O /usr/bin/repo
     chmod a+x /usr/bin/repo
     ccache -M $CCACHE_SIZE
@@ -56,20 +56,26 @@ task:
     # Clone repo
     git clone --depth=1 $DT_REPO -b $DT_BRANCH temp_dt
     
-    # Copy device tree to proper location (keep folder name with dash)
+    # Copy device tree to proper location
     mkdir -p device/infinix
     cp -r temp_dt/Infinix-X6512 device/infinix/
     rm -rf temp_dt
     
     cd $DEVICE_PATH
     
-    # Remove vendorsetup.sh if exists (deprecated)
-    rm -f vendorsetup.sh
-    
-    # Fix omni_infinix_x6512.mk path reference
     echo "=== Fixing device tree files ==="
     
-    # Recreate omni_Infinix_X6512.mk with correct paths
+    # Remove vendorsetup.sh if exists
+    rm -f vendorsetup.sh
+    
+    # Fix device.mk - comment out or remove PRODUCT_STATIC_BOOT_CONTROL_HAL
+    sed -i '/PRODUCT_STATIC_BOOT_CONTROL_HAL/,+4d' device.mk
+    
+    # Or safer approach - just comment it out
+    # sed -i 's/^PRODUCT_STATIC_BOOT_CONTROL_HAL/#PRODUCT_STATIC_BOOT_CONTROL_HAL/' device.mk
+    # sed -i '/^#PRODUCT_STATIC_BOOT_CONTROL_HAL/,+4 s/^/#/' device.mk
+    
+    # Fix omni_Infinix_X6512.mk path reference
     cat > omni_Infinix_X6512.mk << 'EOF'
     # Inherit from those products. Most specific first.
     $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)
@@ -77,7 +83,7 @@ task:
     # Inherit some common Omni stuff.
     $(call inherit-product, vendor/omni/config/common.mk)
     
-    # Inherit from device (folder still uses dash)
+    # Inherit from device (folder uses dash)
     $(call inherit-product, device/infinix/Infinix-X6512/device.mk)
     
     PRODUCT_DEVICE := Infinix_X6512
@@ -132,6 +138,9 @@ task:
       echo "PRODUCT_COPY_FILES += \$(LOCAL_PATH)/recovery/root/init.recovery.touch.rc:root/init.recovery.touch.rc" >> device.mk
     fi
     
+    echo "=== device.mk content after fix ==="
+    cat device.mk
+    
     echo "Device tree ready"
   
   build_script: |
@@ -139,13 +148,7 @@ task:
     cd /tmp/twrp
     source build/envsetup.sh
     
-    # Direct lunch without menu
-    export TARGET_PRODUCT=omni_${DEVICE}
-    export TARGET_BUILD_VARIANT=eng
-    export TARGET_BUILD_TYPE=release
-    set_stuff_for_environment
-    
-    # Alternative: use lunch directly
+    # Use lunch directly
     lunch omni_${DEVICE}-eng
     
     echo "Building recovery..."
@@ -184,13 +187,13 @@ task:
     fi
     
     # Create info file
-    cat > /tmp/artifacts/README.txt << INFO_EOF
+    cat > /tmp/artifacts/README.txt << 'INFO_EOF'
     TWRP for Infinix X6512
     Build Date: $(date)
     
     Flash Instructions:
     1. adb reboot bootloader
-    2. fastboot flash boot twrp-${DEVICE}-*.img
+    2. fastboot flash boot twrp-*.img
     3. fastboot reboot recovery
     
     Features:
