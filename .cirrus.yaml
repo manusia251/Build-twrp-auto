@@ -597,17 +597,17 @@ task:
     echo "  Image size: $IMG_SIZE"
     echo "  MD5: $IMG_MD5"
     
-    # Prepare artifacts
+    # Prepare artifacts inside working dir (relative to /tmp/cirrus-ci-build)
     echo "  Preparing artifacts..."
-    mkdir -p /tmp/artifacts
+    mkdir -p ../artifacts  # Relative to /tmp/twrp, creates /tmp/cirrus-ci-build/artifacts
     
     DATE=$(date +%Y%m%d-%H%M)
     ARTIFACT_NAME="twrp-Infinix_X6512-${DATE}.img"
     
-    cp "$OUTPUT_IMG" "/tmp/artifacts/$ARTIFACT_NAME"
+    cp "$OUTPUT_IMG" "../artifacts/$ARTIFACT_NAME"
     
-    # Create README (enhanced with touchscreen debug info)
-    cat > /tmp/artifacts/README.txt << README_TEXT
+    # Create README
+    cat > ../artifacts/README.txt << README_TEXT
     TWRP Recovery for Infinix X6512
     ================================
     
@@ -643,4 +643,4 @@ task:
     echo "================================================"
   
   artifacts:
-    path: "/tmp/artifacts/*"
+    path: "./artifacts/*"
