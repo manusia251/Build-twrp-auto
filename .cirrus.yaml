@@ -182,9 +182,9 @@ task:
       exit 1
     fi
     
-    # Fix naming inconsistencies
+    # Fix naming inconsistencies (fixed grouping)
     echo "  Fixing naming inconsistencies..."
-    find device/infinix/Infinix_X6512 -type f KATEX_INLINE_OPEN -name "*.mk" -o -name "*.rc" -o -name "*.xml" KATEX_INLINE_CLOSE -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
+    find device/infinix/Infinix_X6512 -type f \( -name "*.mk" -o -name "*.rc" -o -name "*.xml" -o -name "*.dts*" -o -name "*.sh" \) -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
     
     # Cleanup
     rm -rf temp_dt
@@ -502,11 +502,10 @@ task:
     echo "  This will take 15-30 minutes..."
     echo ""
     
-    # Build bootimage with progress filter
+    # Build bootimage with progress filter (fixed regex)
     mka -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
       # Filter for important messages
-      if echo "$line" | grep -qE "```math
-.*%.*```|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
+      if echo "$line" | grep -qE ".*%.*|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
         echo "$line"
       fi
     done || {
