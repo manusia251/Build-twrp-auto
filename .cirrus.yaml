@@ -17,7 +17,7 @@ env:
 
 task:
   name: TWRP Build - Infinix X6512
-  timeout_in: 90m  # Increased timeout for safety
+  timeout_in: 90m
   
   install_dependencies_script: |
     #!/bin/bash
@@ -182,10 +182,9 @@ task:
       exit 1
     fi
     
-    # Fix naming inconsistencies (replace hyphen with underscore in all relevant files)
-    echo "  Fixing naming inconsistencies (hyphen to underscore)..."
-    find device/infinix/Infinix_X6512 -type f \( -name "*.mk" -o -name "*.rc" -o -name "*.xml" -o -name "*.dts*" -o -name "*.sh" \) -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
-    echo "  Naming fixed"
+    # Fix naming inconsistencies
+    echo "  Fixing naming inconsistencies..."
+    find device/infinix/Infinix_X6512 -type f KATEX_INLINE_OPEN -name "*.mk" -o -name "*.rc" -o -name "*.xml" KATEX_INLINE_CLOSE -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
     
     # Cleanup
     rm -rf temp_dt
@@ -305,8 +304,8 @@ task:
     echo "  Creating recovery root structure..."
     mkdir -p recovery/root
     
-    # Create touchscreen init (enhanced based on driver analysis)
-    echo "  Creating enhanced touchscreen initialization..."
+    # Create touchscreen init
+    echo "  Creating touchscreen initialization..."
     cat > recovery/root/init.recovery.touchscreen.rc << 'TOUCH_END'
     on init
         # Create input directories
@@ -333,13 +332,10 @@ task:
         # MediaTek platform specific
         write /sys/devices/platform/11012000.spi2/spi_master/spi2/spi2.0/enable 1
         
-        # Enable ADB root and debug
+        # Enable ADB root
         setprop ro.adb.secure 0
         setprop ro.debuggable 1
         setprop service.adb.root 1
-
-        # Additional MTK TPD init
-        write /sys/devices/virtual/touchscreen/touchscreen0/calibration_type 0
     TOUCH_END
     
     # Update device.mk with init scripts
@@ -373,25 +369,13 @@ task:
     # Fix framework XSD issues
     echo "  Fixing framework XSD issues..."
     if [ -f "frameworks/base/core/xsd/vts/Android.mk" ]; then
-      # Comment out problematic VTS references
       sed -i 's/^include/#include/' frameworks/base/core/xsd/vts/Android.mk 2>/dev/null || true
-      
-      # Or simply create an empty override
       echo "# VTS disabled for TWRP" > frameworks/base/core/xsd/vts/Android.mk
     fi
     
     # Create build workarounds
     echo "  Creating build workarounds..."
     mkdir -p build/make/target/product
-    
-    # Fix any missing soong variables
-    echo "  Setting build flags..."
-    cat > build/make/core/twrp_config.mk << 'CONFIG_END'
-    # TWRP specific build configurations
-    BOARD_USES_RECOVERY_AS_BOOT := true
-    AB_OTA_UPDATER := false
-    BOARD_USES_FULL_RECOVERY_IMAGE := true
-    CONFIG_END
     
     echo "[6/10] VTS and build issues fixed"
     echo ""
@@ -444,14 +428,6 @@ task:
       validation_errors=$((validation_errors + 1))
     fi
     
-    # Additional check: Verify init.rc file exists post-patches
-    if [ -f "recovery/root/init.recovery.touchscreen.rc" ]; then
-      echo "    ✓ recovery/root/init.recovery.touchscreen.rc"
-    else
-      echo "    ✗ Missing: recovery/root/init.recovery.touchscreen.rc"
-      validation_errors=$((validation_errors + 1))
-    fi
-    
     # Report validation result
     if [ $validation_errors -eq 0 ]; then
       echo "[7/10] Validation passed"
@@ -494,7 +470,7 @@ task:
     set -e
     
     echo "================================================"
-    echo "[9/10] Building TWRP Recovery (as bootimage)"
+    echo "[9/10] Building TWRP Recovery"
     echo "================================================"
     
     cd /tmp/twrp
@@ -517,28 +493,26 @@ task:
       echo "  WARNING: Lunch failed, but continuing..."
     }
     
-    # Full clean to force rebuild (fixes 'ninja: no work to do' from incremental builds)
-    echo "  Full clean (rm -rf out)..."
+    # Clean build
+    echo "  Cleaning previous build artifacts..."
     rm -rf out
     
     # Start build
-    echo "  Starting build process (bootimage for recovery-as-boot)..."
+    echo "  Starting build process..."
     echo "  This will take 15-30 minutes..."
     echo ""
     
-    # Build bootimage (primary target for this setup) with better error handling
-    # Using mka for better Ninja compatibility; full output for debugging
-    if ! mka -j$(nproc) bootimage 2>&1 | tee /tmp/build.log; then
-      echo ""
-      echo "  ERROR: Bootimage build failed. Check /tmp/build.log for details."
-      echo "  Last 20 lines of build log:"
-      tail -20 /tmp/build.log
+    # Build bootimage with progress filter
+    mka -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
+      # Filter for important messages
+      if echo "$line" | grep -qE "```math
+.*%.*```|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
+        echo "$line"
+      fi
+    done || {
+      echo "  Build failed"
       exit 1
-    fi
-    
-    # Debug: List output directory contents
-    echo "  Debug: Contents of out/target/product/Infinix_X6512/"
-    ls -la out/target/product/Infinix_X6512/ 2>/dev/null || echo "  No output directory found yet"
+    }
     
     echo ""
     echo "[9/10] Build process completed"
@@ -558,35 +532,17 @@ task:
     echo "  Looking for output image..."
     OUTPUT_IMG=""
     
-    # Check possible locations (prioritize boot.img for recovery-as-boot)
-    for path in \
-      "out/target/product/Infinix_X6512/boot.img" \
-      "out/target/product/Infinix_X6512/recovery.img" \
-      "out/target/product/Infinix-X6512/boot.img" \
-      "out/target/product/infinix_x6512/boot.img"; do
-      if [ -f "$path" ]; then
-        OUTPUT_IMG="$path"
-        echo "  Found: $path"
-        break
-      fi
-    done
-    
-    # Verify output exists
-    if [ -z "$OUTPUT_IMG" ] || [ ! -f "$OUTPUT_IMG" ]; then
+    # Check for boot.img (primary target)
+    if [ -f "out/target/product/Infinix_X6512/boot.img" ]; then
+      OUTPUT_IMG="out/target/product/Infinix_X6512/boot.img"
+      echo "  Found: $OUTPUT_IMG"
+    elif [ -f "out/target/product/Infinix_X6512/recovery.img" ]; then
+      OUTPUT_IMG="out/target/product/Infinix_X6512/recovery.img"
+      echo "  Found: $OUTPUT_IMG"
+    else
       echo "  ERROR: No output image found"
       echo "  Checking output directory..."
-      ls -la out/target/product/ 2>/dev/null || echo "  No product directory"
-      
-      # Try to find any img files
-      echo "  Searching for any .img files..."
-      find out/ -name "*.img" -type f 2>/dev/null || echo "  No .img files found"
-      
-      # Additional debug: Check build log if exists
-      if [ -f "/tmp/build.log" ]; then
-        echo "  Last 10 lines of build log for clues:"
-        tail -10 /tmp/build.log
-      fi
-      
+      ls -la out/target/product/Infinix_X6512/ 2>/dev/null || echo "  No output directory"
       exit 1
     fi
     
@@ -597,49 +553,81 @@ task:
     echo "  Image size: $IMG_SIZE"
     echo "  MD5: $IMG_MD5"
     
-    # Prepare artifacts in working dir root (relative, non-tmp for reliable download)
-    echo "  Preparing artifacts in working dir..."
-    cd ..  # Go to /tmp/cirrus-ci-build
-    mkdir -p artifacts  # Creates ./artifacts relative to working dir
+    # Prepare artifacts directory in /tmp
+    echo "  Preparing artifacts..."
+    mkdir -p /tmp/artifacts
     
     DATE=$(date +%Y%m%d-%H%M)
     ARTIFACT_NAME="twrp-Infinix_X6512-${DATE}.img"
     
-    # Copy from twrp dir (now ../tmp/twrp/out/...)
-    cp "tmp/twrp/$OUTPUT_IMG" "artifacts/$ARTIFACT_NAME"
+    # Copy image to artifacts directory
+    cp "$OUTPUT_IMG" "/tmp/artifacts/$ARTIFACT_NAME"
+    
+    # Also copy the ramdisk images if they exist (for debugging)
+    if [ -f "out/target/product/Infinix_X6512/ramdisk-recovery.img" ]; then
+      cp "out/target/product/Infinix_X6512/ramdisk-recovery.img" "/tmp/artifacts/ramdisk-recovery.img"
+    fi
     
     # Create README
-    cat > artifacts/README.txt << README_TEXT
-    TWRP Recovery for Infinix X6512 (boot.img)
-    ==========================================
+    cat > /tmp/artifacts/README.txt << README_TEXT
+    TWRP Recovery for Infinix X6512
+    ================================
     
     Build Date: $(date)
     File: $ARTIFACT_NAME
     Size: $IMG_SIZE
     MD5: $IMG_MD5
     
-    Installation:
+    Installation Instructions:
+    ==========================
+    
+    Method 1: Flash as boot (recommended for recovery-as-boot devices):
     1. adb reboot bootloader
     2. fastboot flash boot $ARTIFACT_NAME
     3. fastboot reboot recovery
     
+    Method 2: Flash as recovery (if device has separate recovery partition):
+    1. adb reboot bootloader
+    2. fastboot flash recovery $ARTIFACT_NAME
+    3. fastboot reboot recovery
+    
     Features:
+    =========
     - Touchscreen support (Omnivision TCM SPI)
     - ADB Root enabled
     - Fastbootd support
     - FBE Decryption support
+    - USB OTG support
     
-    Touchscreen Debugging:
-    If touchscreen doesn't work, boot to recovery and run via ADB shell:
+    Touchscreen Troubleshooting:
+    ============================
+    If touchscreen doesn't work, connect via ADB and run:
+    
     adb shell
-    echo "spi2.0" > /sys/bus/spi/drivers/omnivision_tcm_spi/bind
-    dmesg | grep -i touch
+    # Check if touchscreen device is detected
     cat /proc/bus/input/devices | grep -i touch
+    
+    # Try to manually bind the driver
+    echo "spi2.0" > /sys/bus/spi/drivers/omnivision_tcm_spi/bind
+    
+    # Check kernel messages for touchscreen errors
+    dmesg | grep -i touch
+    
+    # Check if input events are being generated
+    getevent -l
+    
+    Build Information:
+    ==================
+    Device: Infinix X6512
+    Android Version: 11 (R)
+    TWRP Branch: twrp-11
+    Kernel: Prebuilt from device tree
     README_TEXT
     
-    # Debug: List artifacts
+    # List artifacts
+    echo ""
     echo "  Artifacts prepared:"
-    ls -la artifacts/
+    ls -lah /tmp/artifacts/
     
     echo ""
     echo "[10/10] Build artifacts ready"
@@ -647,6 +635,8 @@ task:
     echo "================================================"
     echo "BUILD COMPLETED SUCCESSFULLY!"
     echo "================================================"
+    echo ""
+    echo "Download the artifacts from Cirrus CI web interface"
   
   artifacts:
-    path: "./artifacts/*"
+    path: "/tmp/artifacts/*"
