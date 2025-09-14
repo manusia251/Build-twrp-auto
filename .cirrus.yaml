@@ -182,9 +182,9 @@ task:
       exit 1
     fi
     
-    # Fix naming inconsistencies (fixed grouping)
+    # Fix naming inconsistencies
     echo "  Fixing naming inconsistencies..."
-    find device/infinix/Infinix_X6512 -type f \( -name "*.mk" -o -name "*.rc" -o -name "*.xml" -o -name "*.dts*" -o -name "*.sh" \) -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
+    find device/infinix/Infinix_X6512 -type f KATEX_INLINE_OPEN -name "*.mk" -o -name "*.rc" -o -name "*.xml" KATEX_INLINE_CLOSE -exec sed -i 's/Infinix-X6512/Infinix_X6512/g' {} + 2>/dev/null || true
     
     # Cleanup
     rm -rf temp_dt
@@ -502,10 +502,11 @@ task:
     echo "  This will take 15-30 minutes..."
     echo ""
     
-    # Build bootimage with progress filter (fixed regex)
+    # Build bootimage with progress filter
     mka -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
       # Filter for important messages
-      if echo "$line" | grep -qE ".*%.*|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
+      if echo "$line" | grep -qE "```math
+.*%.*```|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
         echo "$line"
       fi
     done || {
@@ -524,6 +525,10 @@ task:
     echo "================================================"
     echo "[10/10] Verifying and Preparing Artifacts"
     echo "================================================"
+    
+    # Store current working directory (Cirrus CI working dir)
+    WORKING_DIR=$(pwd)
+    echo "  Current working directory: $WORKING_DIR"
     
     cd /tmp/twrp
     
@@ -552,23 +557,23 @@ task:
     echo "  Image size: $IMG_SIZE"
     echo "  MD5: $IMG_MD5"
     
-    # Prepare artifacts directory in /tmp
-    echo "  Preparing artifacts..."
-    mkdir -p /tmp/artifacts
+    # Create artifacts directory in Cirrus working directory
+    echo "  Preparing artifacts in Cirrus working directory..."
+    mkdir -p "$WORKING_DIR/artifacts"
     
     DATE=$(date +%Y%m%d-%H%M)
     ARTIFACT_NAME="twrp-Infinix_X6512-${DATE}.img"
     
     # Copy image to artifacts directory
-    cp "$OUTPUT_IMG" "/tmp/artifacts/$ARTIFACT_NAME"
+    cp "$OUTPUT_IMG" "$WORKING_DIR/artifacts/$ARTIFACT_NAME"
     
     # Also copy the ramdisk images if they exist (for debugging)
     if [ -f "out/target/product/Infinix_X6512/ramdisk-recovery.img" ]; then
-      cp "out/target/product/Infinix_X6512/ramdisk-recovery.img" "/tmp/artifacts/ramdisk-recovery.img"
+      cp "out/target/product/Infinix_X6512/ramdisk-recovery.img" "$WORKING_DIR/artifacts/ramdisk-recovery.img"
     fi
     
     # Create README
-    cat > /tmp/artifacts/README.txt << README_TEXT
+    cat > "$WORKING_DIR/artifacts/README.txt" << README_TEXT
     TWRP Recovery for Infinix X6512
     ================================
     
@@ -623,10 +628,11 @@ task:
     Kernel: Prebuilt from device tree
     README_TEXT
     
-    # List artifacts
+    # Change back to working directory and list artifacts
+    cd "$WORKING_DIR"
     echo ""
     echo "  Artifacts prepared:"
-    ls -lah /tmp/artifacts/
+    ls -lah artifacts/
     
     echo ""
     echo "[10/10] Build artifacts ready"
@@ -638,4 +644,4 @@ task:
     echo "Download the artifacts from Cirrus CI web interface"
   
   artifacts:
-    path: "/tmp/artifacts/*"
+    path: "artifacts/**"
