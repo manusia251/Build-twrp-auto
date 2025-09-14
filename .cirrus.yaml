@@ -505,8 +505,7 @@ task:
     # Build bootimage with progress filter
     mka -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
       # Filter for important messages
-      if echo "$line" | grep -qE "```math
-.*%.*```|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
+      if echo "$line" | grep -qE ".*%.*|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
         echo "$line"
       fi
     done || {
