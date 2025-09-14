@@ -17,7 +17,7 @@ env:
 
 task:
   name: TWRP Build - Infinix X6512
-  timeout_in: 60m
+  timeout_in: 90m  # Increased timeout for safety
   
   install_dependencies_script: |
     #!/bin/bash
@@ -473,7 +473,7 @@ task:
     set -e
     
     echo "================================================"
-    echo "[9/10] Building TWRP Recovery"
+    echo "[9/10] Building TWRP Recovery (as bootimage)"
     echo "================================================"
     
     cd /tmp/twrp
@@ -492,41 +492,32 @@ task:
     # Select target
     export TARGET_PRODUCT=twrp_Infinix_X6512
     export TARGET_BUILD_VARIANT=eng
-    lunch twrp_Infinix_X6512-eng > /dev/null 2>&1 || true
+    lunch twrp_Infinix_X6512-eng > /dev/null 2>&1 || {
+      echo "  WARNING: Lunch failed, but continuing..."
+    }
     
-    # Clean any previous builds
-    echo "  Cleaning previous build artifacts..."
-    make clean > /dev/null 2>&1 || true
+    # Full clean to force rebuild (fixes 'ninja: no work to do' from incremental builds)
+    echo "  Full clean (rm -rf out)..."
+    rm -rf out
     
     # Start build
-    echo "  Starting build process..."
+    echo "  Starting build process (bootimage for recovery-as-boot)..."
     echo "  This will take 15-30 minutes..."
     echo ""
     
-    # Build with error handling
-    make -j$(nproc) recoveryimage 2>&1 | while IFS= read -r line; do
-      # Filter for important messages only
-      if echo "$line" | grep -qE "^###|^####|^target |^Install:|^Output:|FAILED|error:"; then
-        echo "  $line"
-      elif echo "$line" | grep -qE "^build completed successfully|^build failed"; then
-        echo "$line"
-      elif echo "$line" | grep -q "ninja:"; then
-        echo "  $line"
-      fi
-    done || {
+    # Build bootimage (primary target for this setup) with better error handling
+    # Using mka for better Ninja compatibility; full output for debugging
+    if ! mka -j$(nproc) bootimage 2>&1 | tee /tmp/build.log; then
       echo ""
-      echo "  Build failed. Trying alternative build command..."
-      
-      # Try alternative build command
-      make -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
-        if echo "$line" | grep -qE "^###|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
-          echo "  $line"
-        fi
-      done || {
-        echo "  Alternative build also failed"
-        exit 1
-      }
-    }
+      echo "  ERROR: Bootimage build failed. Check /tmp/build.log for details."
+      echo "  Last 20 lines of build log:"
+      tail -20 /tmp/build.log
+      exit 1
+    fi
+    
+    # Debug: List output directory contents
+    echo "  Debug: Contents of out/target/product/Infinix_X6512/"
+    ls -la out/target/product/Infinix_X6512/ 2>/dev/null || echo "  No output directory found yet"
     
     echo ""
     echo "[9/10] Build process completed"
@@ -546,7 +537,7 @@ task:
     echo "  Looking for output image..."
     OUTPUT_IMG=""
     
-    # Check possible locations
+    # Check possible locations (prioritize boot.img for recovery-as-boot)
     for path in \
       "out/target/product/Infinix_X6512/boot.img" \
       "out/target/product/Infinix_X6512/recovery.img" \
@@ -568,6 +559,12 @@ task:
       # Try to find any img files
       echo "  Searching for any .img files..."
       find out/ -name "*.img" -type f 2>/dev/null || echo "  No .img files found"
+      
+      # Additional debug: Check build log if exists
+      if [ -f "/tmp/build.log" ]; then
+        echo "  Last 10 lines of build log for clues:"
+        tail -10 /tmp/build.log
+      fi
       
       exit 1
     fi
