@@ -339,12 +339,56 @@ task:
     echo "[5/10] Patches applied successfully"
     echo ""
   
+  fix_vts_issues_script: |
+    #!/bin/bash
+    set -e
+    
+    echo "================================================"
+    echo "[6/10] Fixing VTS and Build Issues"
+    echo "================================================"
+    
+    cd /tmp/twrp
+    
+    # Create missing VTS directory and file
+    echo "  Creating missing VTS build files..."
+    mkdir -p test/vts/tools/build
+    cat > test/vts/tools/build/Android.host_config.mk << 'VTS_END'
+    # Dummy VTS config for TWRP build
+    VTS_TOOLS_BUILD_PATH := test/vts/tools/build
+    VTS_END
+    
+    # Fix framework XSD issues
+    echo "  Fixing framework XSD issues..."
+    if [ -f "frameworks/base/core/xsd/vts/Android.mk" ]; then
+      # Comment out problematic VTS references
+      sed -i 's/^include/#include/' frameworks/base/core/xsd/vts/Android.mk 2>/dev/null || true
+      
+      # Or simply create an empty override
+      echo "# VTS disabled for TWRP" > frameworks/base/core/xsd/vts/Android.mk
+    fi
+    
+    # Create build workarounds
+    echo "  Creating build workarounds..."
+    mkdir -p build/make/target/product
+    
+    # Fix any missing soong variables
+    echo "  Setting build flags..."
+    cat > build/make/core/twrp_config.mk << 'CONFIG_END'
+    # TWRP specific build configurations
+    BOARD_USES_RECOVERY_AS_BOOT := true
+    AB_OTA_UPDATER := false
+    BOARD_USES_FULL_RECOVERY_IMAGE := true
+    CONFIG_END
+    
+    echo "[6/10] VTS and build issues fixed"
+    echo ""
+  
   validate_device_tree_script: |
     #!/bin/bash
     set -e
     
     echo "================================================"
-    echo "[6/10] Validating Device Tree"
+    echo "[7/10] Validating Device Tree"
     echo "================================================"
     
     cd /tmp/twrp/device/infinix/Infinix_X6512
@@ -389,9 +433,9 @@ task:
     
     # Report validation result
     if [ $validation_errors -eq 0 ]; then
-      echo "[6/10] Validation passed"
+      echo "[7/10] Validation passed"
     else
-      echo "[6/10] Validation failed: $validation_errors errors"
+      echo "[7/10] Validation failed: $validation_errors errors"
       exit 1
     fi
     echo ""
@@ -401,7 +445,7 @@ task:
     set -e
     
     echo "================================================"
-    echo "[7/10] Setting Up Build Environment"
+    echo "[8/10] Setting Up Build Environment"
     echo "================================================"
     
     cd /tmp/twrp
@@ -421,47 +465,7 @@ task:
     echo "  Ccache statistics:"
     ccache -s | grep -E "cache size|hit rate" || echo "    Ccache ready"
     
-    echo "[7/10] Build environment ready"
-    echo ""
-  
-  select_lunch_target_script: |
-    #!/bin/bash
-    set -e
-    
-    echo "================================================"
-    echo "[8/10] Selecting Build Target"
-    echo "================================================"
-    
-    cd /tmp/twrp
-    
-    # Source environment
-    source build/envsetup.sh > /dev/null 2>&1
-    
-    # Try to lunch with menu option
-    echo "  Attempting to select twrp_Infinix_X6512-eng..."
-    
-    # Method 1: Try direct input to lunch menu
-    echo "5" | lunch > /dev/null 2>&1 || {
-      # Method 2: Try direct lunch command
-      echo "  Direct lunch method..."
-      lunch twrp_Infinix_X6512-eng > /dev/null 2>&1 || {
-        # Method 3: Export variables manually
-        echo "  Manual configuration..."
-        export TARGET_PRODUCT=twrp_Infinix_X6512
-        export TARGET_BUILD_VARIANT=eng
-        export TARGET_BUILD_TYPE=release
-        export PRODUCT_NAME=twrp_Infinix_X6512
-        export TARGET_DEVICE=Infinix_X6512
-      }
-    }
-    
-    # Verify selection
-    if [ -n "$TARGET_PRODUCT" ]; then
-      echo "  Selected: $TARGET_PRODUCT-$TARGET_BUILD_VARIANT"
-      echo "[8/10] Target selected successfully"
-    else
-      echo "[8/10] WARNING: Target selection uncertain"
-    fi
+    echo "[8/10] Build environment ready"
     echo ""
   
   build_recovery_script: |
@@ -474,8 +478,15 @@ task:
     
     cd /tmp/twrp
     
-    # Setup environment
+    # Setup environment with VTS disabled
     export ALLOW_MISSING_DEPENDENCIES=true
+    export BOARD_VNDK_VERSION=current
+    export WITHOUT_CHECK_API=true
+    export WITH_DEXPREOPT=false
+    export BUILD_BROKEN_DUP_RULES=true
+    export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
+    export BUILD_BROKEN_VINTF_PRODUCT_COPY_FILES=true
+    
     source build/envsetup.sh > /dev/null 2>&1
     
     # Select target
@@ -483,22 +494,38 @@ task:
     export TARGET_BUILD_VARIANT=eng
     lunch twrp_Infinix_X6512-eng > /dev/null 2>&1 || true
     
+    # Clean any previous builds
+    echo "  Cleaning previous build artifacts..."
+    make clean > /dev/null 2>&1 || true
+    
     # Start build
     echo "  Starting build process..."
     echo "  This will take 15-30 minutes..."
     echo ""
     
-    # Build with progress filter
+    # Build with error handling
     make -j$(nproc) recoveryimage 2>&1 | while IFS= read -r line; do
       # Filter for important messages only
       if echo "$line" | grep -qE "^###|^####|^target |^Install:|^Output:|FAILED|error:"; then
         echo "  $line"
       elif echo "$line" | grep -qE "^build completed successfully|^build failed"; then
         echo "$line"
+      elif echo "$line" | grep -q "ninja:"; then
+        echo "  $line"
       fi
     done || {
-      echo "  Build failed. Checking for errors..."
-      exit 1
+      echo ""
+      echo "  Build failed. Trying alternative build command..."
+      
+      # Try alternative build command
+      make -j$(nproc) bootimage 2>&1 | while IFS= read -r line; do
+        if echo "$line" | grep -qE "^###|^####|^target |^Install:|^Output:|FAILED|error:|ninja:"; then
+          echo "  $line"
+        fi
+      done || {
+        echo "  Alternative build also failed"
+        exit 1
+      }
     }
     
     echo ""
@@ -537,6 +564,11 @@ task:
       echo "  ERROR: No output image found"
       echo "  Checking output directory..."
       ls -la out/target/product/ 2>/dev/null || echo "  No product directory"
+      
+      # Try to find any img files
+      echo "  Searching for any .img files..."
+      find out/ -name "*.img" -type f 2>/dev/null || echo "  No .img files found"
+      
       exit 1
     fi
     
