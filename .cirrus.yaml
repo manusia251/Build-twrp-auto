@@ -491,8 +491,7 @@ task:
     # Build with progress filter
     make -j$(nproc) recoveryimage 2>&1 | while IFS= read -r line; do
       # Filter for important messages only
-      if echo "$line" | grep -qE "^```math
-.*```|^####|^target |^Install:|^Output:|FAILED|error:"; then
+      if echo "$line" | grep -qE "^###|^####|^target |^Install:|^Output:|FAILED|error:"; then
         echo "  $line"
       elif echo "$line" | grep -qE "^build completed successfully|^build failed"; then
         echo "$line"
