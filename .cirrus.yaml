@@ -12,7 +12,7 @@ env:
   MANIFEST: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
   MANIFEST_BRANCH: twrp-11
   
-  # Your device tree (ada di subfolder)
+  # Your device tree
   DT_REPO: https://github.com/manusia251/twrp-test
   DT_BRANCH: main
   
@@ -54,19 +54,43 @@ task:
     echo "=== Setting up device tree ==="
     cd /tmp/twrp
     
-    # Clone the repo first
+    # Clone the repo
     git clone --depth=1 $DT_REPO -b $DT_BRANCH temp_dt
     
-    # Copy the Infinix-X6512 folder to proper location
+    # Copy the device tree to proper location
     mkdir -p device/infinix
     cp -r temp_dt/Infinix-X6512 device/infinix/
     rm -rf temp_dt
     
     # Navigate to device tree
     cd $DEVICE_PATH
+    
+    echo "=== Fixing AndroidProducts.mk ==="
+    # Fix the AndroidProducts.mk - remove the -X6512 variant part
+    cat > AndroidProducts.mk << 'PRODUCTS_EOF'
+    PRODUCT_MAKEFILES := \
+        $(LOCAL_DIR)/omni_Infinix-X6512.mk
+    
+    COMMON_LUNCH_CHOICES := \
+        omni_Infinix-X6512-user \
+        omni_Infinix-X6512-userdebug \
+        omni_Infinix-X6512-eng
+    PRODUCTS_EOF
+    
+    echo "=== Fixing Android.mk ==="
+    # Also fix Android.mk
+    cat > Android.mk << 'ANDROID_MK_EOF'
+    LOCAL_PATH := $(call my-dir)
+    
+    ifeq ($(TARGET_DEVICE),Infinix-X6512)
+    include $(call all-subdir-makefiles,$(LOCAL_PATH))
+    endif
+    ANDROID_MK_EOF
+    
+    echo "=== Checking files ==="
     ls -la
     
-    echo "=== Checking required files ==="
+    echo "=== Verifying required files ==="
     for file in Android.mk AndroidProducts.mk BoardConfig.mk device.mk omni_${DEVICE}.mk recovery.fstab; do
       if [ -f "$file" ]; then
         echo "✓ $file"
@@ -90,7 +114,7 @@ task:
       exit 1
     fi
     
-    echo "=== Adding patches ==="
+    echo "=== Adding patches to BoardConfig.mk ==="
     cat >> BoardConfig.mk << 'PATCH_EOF'
     
     # CI Optimizations
@@ -107,6 +131,7 @@ task:
     TW_DEFAULT_BRIGHTNESS := 120
     PATCH_EOF
     
+    echo "=== Creating touch init script ==="
     mkdir -p recovery/root
     cat > recovery/root/init.recovery.touch.rc << 'TOUCH_EOF'
     on boot
@@ -121,50 +146,55 @@ task:
     
     echo "" >> device.mk
     echo "PRODUCT_COPY_FILES += \$(LOCAL_PATH)/recovery/root/init.recovery.touch.rc:root/init.recovery.touch.rc" >> device.mk
+    
     echo "=== Device tree ready ==="
   
   build_script: |
     echo "=== Building TWRP ==="
     cd /tmp/twrp
     source build/envsetup.sh
-    lunch omni_${DEVICE}-eng
+    
+    echo "=== Available lunch choices: ==="
+    lunch
+    
+    echo "=== Selecting lunch target ==="
+    lunch omni_Infinix-X6512-eng
+    
+    echo "=== Starting build ==="
     make -j$(nproc) recoveryimage
     
-    if [ -f out/target/product/${DEVICE}/boot.img ]; then
-      echo "=== Build successful ==="
-      ls -lh out/target/product/${DEVICE}/boot.img
-      md5sum out/target/product/${DEVICE}/boot.img
+    echo "=== Checking output ==="
+    if [ -f out/target/product/Infinix-X6512/boot.img ]; then
+      echo "✓ boot.img found"
+      ls -lh out/target/product/Infinix-X6512/boot.img
+      md5sum out/target/product/Infinix-X6512/boot.img
+    elif [ -f out/target/product/Infinix-X6512/recovery.img ]; then
+      echo "✓ recovery.img found"
+      ls -lh out/target/product/Infinix-X6512/recovery.img
+      md5sum out/target/product/Infinix-X6512/recovery.img
     else
-      echo "=== Build failed - checking for recovery.img ==="
-      if [ -f out/target/product/${DEVICE}/recovery.img ]; then
-        echo "Found recovery.img instead"
-        ls -lh out/target/product/${DEVICE}/recovery.img
-      else
-        echo "No output image found"
-        ls -la out/target/product/${DEVICE}/
-        exit 1
-      fi
+      echo "✗ No output image found"
+      ls -la out/target/product/Infinix-X6512/
+      exit 1
     fi
   
   prepare_artifacts_script: |
     echo "=== Preparing artifacts ==="
     cd /tmp/twrp
-    OUT=out/target/product/${DEVICE}
     mkdir -p /tmp/artifacts
     
-    if [ -f $OUT/boot.img ]; then
+    if [ -f out/target/product/Infinix-X6512/boot.img ]; then
       DATE=$(date +%Y%m%d-%H%M)
-      cp $OUT/boot.img /tmp/artifacts/twrp-${DEVICE}-${DATE}.img
+      cp out/target/product/Infinix-X6512/boot.img /tmp/artifacts/twrp-X6512-${DATE}.img
       
-      cat > /tmp/artifacts/README.txt << INFO_EOF
+      cat > /tmp/artifacts/README.txt << 'INFO_EOF'
     TWRP for Infinix X6512
     ======================
     Build Date: $(date)
-    MD5: $(md5sum $OUT/boot.img | cut -d' ' -f1)
     
     How to flash:
     1. adb reboot bootloader
-    2. fastboot flash boot twrp-${DEVICE}-${DATE}.img  
+    2. fastboot flash boot twrp-X6512-*.img
     3. fastboot reboot recovery
     
     Features:
@@ -177,10 +207,10 @@ task:
       
       echo "=== Artifacts ready ==="
       ls -la /tmp/artifacts/
-    elif [ -f $OUT/recovery.img ]; then
+    elif [ -f out/target/product/Infinix-X6512/recovery.img ]; then
       DATE=$(date +%Y%m%d-%H%M)
-      cp $OUT/recovery.img /tmp/artifacts/twrp-${DEVICE}-${DATE}-recovery.img
-      echo "Using recovery.img instead of boot.img"
+      cp out/target/product/Infinix-X6512/recovery.img /tmp/artifacts/twrp-X6512-${DATE}-recovery.img
+      echo "Using recovery.img"
       ls -la /tmp/artifacts/
     fi
   
