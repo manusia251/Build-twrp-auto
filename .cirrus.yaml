@@ -35,17 +35,19 @@ task:
       git gnupg gperf lib32ncurses5-dev lib32z1-dev liblz4-tool \
       libncurses5 libssl-dev libxml2 libxml2-utils lzop \
       python python3 rsync unzip zip openjdk-8-jdk-headless \
-      ca-certificates wget file make
+      ca-certificates wget file make openssh-client
     wget -q https://storage.googleapis.com/git-repo-downloads/repo -O /usr/bin/repo
     chmod a+x /usr/bin/repo
     ccache -M $CCACHE_SIZE
+    git config --global user.email "ci@cirrus.com"
+    git config --global user.name "Cirrus CI"
     echo "=== Dependencies installed ==="
   
   sync_script: |
     echo "=== Syncing minimal TWRP sources ==="
     mkdir -p /tmp/twrp && cd /tmp/twrp
-    repo init --depth=1 -u $MANIFEST -b $MANIFEST_BRANCH -g default,-darwin,-mips,-x86 --no-repo-verify
-    repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags --current-branch --optimized-fetch
+    repo init --depth=1 -u $MANIFEST -b $MANIFEST_BRANCH --no-repo-verify
+    repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags --optimized-fetch
     echo "=== Sync completed ==="
   
   device_tree_script: |
@@ -54,13 +56,32 @@ task:
     git clone --depth=1 $DT_REPO -b $DT_BRANCH $DEVICE_PATH
     
     cd $DEVICE_PATH
+    echo "=== Checking required files ==="
     for file in Android.mk AndroidProducts.mk BoardConfig.mk device.mk omni_${DEVICE}.mk recovery.fstab; do
-      [ -f "$file" ] && echo "✓ $file" || (echo "✗ Missing $file" && exit 1)
+      if [ -f "$file" ]; then
+        echo "✓ $file"
+      else
+        echo "✗ Missing $file"
+        exit 1
+      fi
     done
-    [ -f "prebuilt/kernel" ] && echo "✓ Kernel found" || (echo "✗ Missing kernel" && exit 1)
-    [ -f "prebuilt/dtb.img" ] && echo "✓ DTB found" || (echo "✗ Missing DTB" && exit 1)
     
-    cat >> BoardConfig.mk << EOF
+    if [ -f "prebuilt/kernel" ]; then
+      echo "✓ Kernel found"
+    else
+      echo "✗ Missing kernel"
+      exit 1
+    fi
+    
+    if [ -f "prebuilt/dtb.img" ]; then
+      echo "✓ DTB found"
+    else
+      echo "✗ Missing DTB"
+      exit 1
+    fi
+    
+    echo "=== Adding patches ==="
+    cat >> BoardConfig.mk << 'PATCH_EOF'
     
     # CI Optimizations
     TW_INCLUDE_FASTBOOTD := true
@@ -74,10 +95,10 @@ task:
     TWRP_INCLUDE_LOGCAT := true
     TW_NO_SCREEN_BLANK := true
     TW_DEFAULT_BRIGHTNESS := 120
-    EOF
+    PATCH_EOF
     
     mkdir -p recovery/root
-    cat > recovery/root/init.recovery.touch.rc << EOF
+    cat > recovery/root/init.recovery.touch.rc << 'TOUCH_EOF'
     on boot
         write /sys/bus/spi/drivers/omnivision_tcm_spi/bind "spi2.0"
         chmod 0660 /dev/input/event0
@@ -86,8 +107,9 @@ task:
         write /sys/class/omnivision_tcm/tcm0/enable 1
         setprop ro.adb.secure 0
         setprop service.adb.root 1
-    EOF
+    TOUCH_EOF
     
+    echo "" >> device.mk
     echo "PRODUCT_COPY_FILES += \$(LOCAL_PATH)/recovery/root/init.recovery.touch.rc:root/init.recovery.touch.rc" >> device.mk
     echo "=== Device tree ready ==="
   
@@ -95,7 +117,7 @@ task:
     echo "=== Building TWRP ==="
     cd /tmp/twrp
     source build/envsetup.sh
-    lunch omni_${DEVICE}-eng || lunch twrp_${DEVICE}-eng
+    lunch omni_${DEVICE}-eng
     make -j$(nproc) recoveryimage
     
     if [ -f out/target/product/${DEVICE}/boot.img ]; then
@@ -103,33 +125,48 @@ task:
       ls -lh out/target/product/${DEVICE}/boot.img
       md5sum out/target/product/${DEVICE}/boot.img
     else
-      echo "=== Build failed ==="
-      exit 1
+      echo "=== Build failed - checking for recovery.img ==="
+      if [ -f out/target/product/${DEVICE}/recovery.img ]; then
+        echo "Found recovery.img instead"
+        ls -lh out/target/product/${DEVICE}/recovery.img
+      else
+        echo "No output image found"
+        exit 1
+      fi
     fi
   
-  artifacts_script: |
+  prepare_artifacts_script: |
     echo "=== Preparing artifacts ==="
     cd /tmp/twrp
     OUT=out/target/product/${DEVICE}
+    mkdir -p /tmp/artifacts
     
     if [ -f $OUT/boot.img ]; then
-      mkdir -p /tmp/artifacts
       DATE=$(date +%Y%m%d-%H%M)
       cp $OUT/boot.img /tmp/artifacts/twrp-${DEVICE}-${DATE}.img
       
-      cat > /tmp/artifacts/info.txt << EOF
+      cat > /tmp/artifacts/README.txt << INFO_EOF
     TWRP for Infinix X6512
+    ======================
     Build Date: $(date)
     MD5: $(md5sum $OUT/boot.img | cut -d' ' -f1)
-    Size: $(stat -c%s $OUT/boot.img | numfmt --to=iec)
     
-    Flash: fastboot flash boot twrp-${DEVICE}-${DATE}.img
-    EOF
+    How to flash:
+    1. adb reboot bootloader
+    2. fastboot flash boot twrp-${DEVICE}-${DATE}.img
+    3. fastboot reboot recovery
+    
+    Features:
+    - Touchscreen support (Omnivision TCM SPI)
+    - ADB Root enabled
+    - Fastbootd support
+    - Magisk support
+    - FBE Decryption support
+    INFO_EOF
       
       echo "=== Artifacts ready ==="
       ls -la /tmp/artifacts/
     fi
   
   artifacts:
-    path: /tmp/artifacts/**
-    type: application/octet-stream
+    path: "/tmp/artifacts/*"
