@@ -5,7 +5,7 @@ container:
 
 env:
   # Device config
-  DEVICE: Infinix-X6512
+  DEVICE: Infinix_X6512
   DEVICE_PATH: device/infinix/Infinix-X6512
   
   # TWRP Minimal Manifest
@@ -158,7 +158,7 @@ task:
     lunch
     
     echo "=== Selecting lunch target ==="
-    lunch omni_Infinix-X6512-eng
+    lunch omni_Infinix_X6512-eng
     
     echo "=== Starting build ==="
     make -j$(nproc) recoveryimage
