@@ -12,7 +12,7 @@ env:
   MANIFEST: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
   MANIFEST_BRANCH: twrp-11
   
-  # Your device tree
+  # Your device tree (ada di subfolder)
   DT_REPO: https://github.com/manusia251/twrp-test
   DT_BRANCH: main
   
@@ -53,9 +53,19 @@ task:
   device_tree_script: |
     echo "=== Setting up device tree ==="
     cd /tmp/twrp
-    git clone --depth=1 $DT_REPO -b $DT_BRANCH $DEVICE_PATH
     
+    # Clone the repo first
+    git clone --depth=1 $DT_REPO -b $DT_BRANCH temp_dt
+    
+    # Copy the Infinix-X6512 folder to proper location
+    mkdir -p device/infinix
+    cp -r temp_dt/Infinix-X6512 device/infinix/
+    rm -rf temp_dt
+    
+    # Navigate to device tree
     cd $DEVICE_PATH
+    ls -la
+    
     echo "=== Checking required files ==="
     for file in Android.mk AndroidProducts.mk BoardConfig.mk device.mk omni_${DEVICE}.mk recovery.fstab; do
       if [ -f "$file" ]; then
@@ -131,6 +141,7 @@ task:
         ls -lh out/target/product/${DEVICE}/recovery.img
       else
         echo "No output image found"
+        ls -la out/target/product/${DEVICE}/
         exit 1
       fi
     fi
@@ -153,7 +164,7 @@ task:
     
     How to flash:
     1. adb reboot bootloader
-    2. fastboot flash boot twrp-${DEVICE}-${DATE}.img
+    2. fastboot flash boot twrp-${DEVICE}-${DATE}.img  
     3. fastboot reboot recovery
     
     Features:
@@ -165,6 +176,11 @@ task:
     INFO_EOF
       
       echo "=== Artifacts ready ==="
+      ls -la /tmp/artifacts/
+    elif [ -f $OUT/recovery.img ]; then
+      DATE=$(date +%Y%m%d-%H%M)
+      cp $OUT/recovery.img /tmp/artifacts/twrp-${DEVICE}-${DATE}-recovery.img
+      echo "Using recovery.img instead of boot.img"
       ls -la /tmp/artifacts/
     fi
   
